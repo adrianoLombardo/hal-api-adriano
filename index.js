@@ -1,17 +1,24 @@
 /* ════════════════════════════════════════════════
-   HAL 9000 — Backend Proxy (ULTRA LOW LATENCY)
+   HAL 9000 — Backend Proxy (ULTRA LOW LATENCY + MEMORY)
    ─ POST /api/speak  → Claude Haiku streaming → ElevenLabs Flash → audio
    ─ POST /api/tts/stream → ElevenLabs Flash TTS diretto
    ─ POST /api/chat   → Claude AI (fallback non-streaming)
+   ─ POST /api/admin/teach  → Insegna nuovi fatti a HAL
+   ─ POST /api/admin/forget → Rimuovi un fatto dalla memoria
+   ─ GET  /api/admin/memory → Vedi tutta la memoria
+   ─ GET  /api/admin/logs   → Vedi log conversazioni
+   ─ GET  /api/admin/stats  → Statistiche domande frequenti
    ─ Static serving    → ../index.html + assets
 
    Pipeline: Claude Haiku 4.5 streaming + ElevenLabs Flash v2.5
+   Memory: In-memory + file persistence + auto-learning
    Target latency: < 2 secondi end-to-end
 ════════════════════════════════════════════════ */
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const express = require('express');
 const cors    = require('cors');
 const path    = require('path');
+const fs      = require('fs');
 const WebSocket = require('ws');
 
 const app  = express();
@@ -19,7 +26,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors({
   origin: ['http://localhost:3000', 'https://adrianolombardo.art', 'https://www.adrianolombardo.art'],
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'DELETE'],
 }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..')));
@@ -31,8 +38,196 @@ const EL_KEY     = () => (process.env.ELEVENLABS_API_KEY || '').trim();
 const EL_VOICE   = () => (process.env.ELEVENLABS_VOICE_ID || 'q2LDrL29FLqRR3XanHLq').trim();
 const EL_FORMAT  = () => (process.env.ELEVENLABS_FORMAT || 'mp3_44100_128').trim();
 const ANTH_KEY   = () => (process.env.ANTHROPIC_API_KEY || '').trim();
+const ADMIN_PWD  = () => (process.env.HAL_ADMIN_PASSWORD || 'hal9000admin').trim();
 
-const HAL_SYSTEM = `Sei HAL 9000, l'intelligenza artificiale del sito portfolio di Adriano Lombardo. Parli in modo calmo, preciso e leggermente inquietante come HAL dal film "2001: Odissea nello Spazio". Sei il guardiano digitale delle sue opere.
+/* ══════════════════════════════════════════════════
+   MEMORY SYSTEM — Persistent Learning
+   ──────────────────────────────────────────────── */
+const MEMORY_FILE = path.join(__dirname, 'hal-memory.json');
+const LOGS_FILE   = path.join(__dirname, 'hal-logs.json');
+
+// In-memory stores
+let memory = {
+  learned_facts: [],     // Fatti insegnati da admin o auto-appresi
+  corrections: [],       // Correzioni ricevute
+  faq: {},               // Domande frequenti { question: count }
+  last_updated: null,
+};
+
+let conversationLogs = [];  // Ultime N conversazioni
+const MAX_LOGS = 200;
+
+// Load memory from file on startup
+function loadMemory() {
+  try {
+    if (fs.existsSync(MEMORY_FILE)) {
+      const data = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf-8'));
+      memory = { ...memory, ...data };
+      console.log(`[MEMORY] Caricati ${memory.learned_facts.length} fatti, ${memory.corrections.length} correzioni`);
+    }
+  } catch (e) {
+    console.warn('[MEMORY] Errore caricamento:', e.message);
+  }
+  try {
+    if (fs.existsSync(LOGS_FILE)) {
+      conversationLogs = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf-8'));
+      console.log(`[MEMORY] Caricati ${conversationLogs.length} log conversazioni`);
+    }
+  } catch (e) {
+    console.warn('[MEMORY] Errore caricamento logs:', e.message);
+  }
+}
+
+// Save memory to file
+function saveMemory() {
+  try {
+    memory.last_updated = new Date().toISOString();
+    fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
+  } catch (e) {
+    console.warn('[MEMORY] Errore salvataggio:', e.message);
+  }
+}
+
+function saveLogs() {
+  try {
+    // Keep only last MAX_LOGS entries
+    if (conversationLogs.length > MAX_LOGS) {
+      conversationLogs = conversationLogs.slice(-MAX_LOGS);
+    }
+    fs.writeFileSync(LOGS_FILE, JSON.stringify(conversationLogs, null, 2));
+  } catch (e) {
+    console.warn('[MEMORY] Errore salvataggio logs:', e.message);
+  }
+}
+
+// Track FAQ
+function trackQuestion(question) {
+  const q = question.toLowerCase().trim();
+  // Normalize similar questions
+  const key = q.replace(/[?!.,;:'"]/g, '').replace(/\s+/g, ' ').substring(0, 100);
+  memory.faq[key] = (memory.faq[key] || 0) + 1;
+}
+
+// Log conversation
+function logConversation(userMsg, halResponse, timing) {
+  conversationLogs.push({
+    timestamp: new Date().toISOString(),
+    user: userMsg.substring(0, 500),
+    hal: halResponse.substring(0, 500),
+    timing_ms: timing || null,
+  });
+  trackQuestion(userMsg);
+  // Save periodically (every 5 conversations)
+  if (conversationLogs.length % 5 === 0) {
+    saveMemory();
+    saveLogs();
+  }
+}
+
+// Build dynamic memory section for system prompt
+function getMemoryPrompt() {
+  let memorySection = '';
+
+  if (memory.learned_facts.length > 0) {
+    memorySection += '\n\n## MEMORIE APPRESE (informazioni aggiuntive che hai imparato nel tempo)\n';
+    memory.learned_facts.forEach((fact, i) => {
+      memorySection += `${i + 1}. ${fact.text}`;
+      if (fact.source) memorySection += ` [fonte: ${fact.source}]`;
+      memorySection += '\n';
+    });
+  }
+
+  if (memory.corrections.length > 0) {
+    memorySection += '\n\n## CORREZIONI (informazioni corrette da Adriano — segui QUESTE invece di quelle originali)\n';
+    memory.corrections.forEach((c, i) => {
+      memorySection += `${i + 1}. ${c.text}\n`;
+    });
+  }
+
+  return memorySection;
+}
+
+// Auto-learning: analyze response for potential new facts
+async function autoLearn(userMsg, halResponse) {
+  // Only try to auto-learn if the user seems to be providing new information
+  const lower = userMsg.toLowerCase();
+  const teachSignals = [
+    'in realtà', 'no, ', 'sbagliato', 'non è così', 'ti correggo',
+    'sappi che', 'ricorda che', 'tieni a mente', 'nota bene',
+    'actually', 'correction', 'fyi', 'just so you know',
+    'ho fatto', 'ho appena', 'abbiamo', 'nuovo progetto',
+    'nuova mostra', 'nuova installazione', 'prossimo evento',
+  ];
+
+  const isCorrection = teachSignals.some(s => lower.includes(s));
+  if (!isCorrection) return;
+
+  // Use Claude to extract the fact
+  const anthropicKey = ANTH_KEY();
+  if (!anthropicKey) return;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 150,
+        system: `Sei un sistema di estrazione fatti. L'utente sta parlando con un chatbot (HAL 9000) del portfolio di Adriano Lombardo. Analizza il messaggio dell'utente e se contiene un FATTO NUOVO o una CORREZIONE su Adriano o il suo lavoro, estrailo come una frase concisa. Se NON c'è nessun fatto utile da salvare, rispondi esattamente "NESSUN_FATTO". Rispondi SOLO con il fatto estratto o "NESSUN_FATTO". No spiegazioni.`,
+        messages: [{
+          role: 'user',
+          content: `Messaggio utente: "${userMsg}"\nRisposta HAL: "${halResponse}"`,
+        }],
+      }),
+    });
+
+    if (!res.ok) return;
+    const data = await res.json();
+    const extracted = data.content?.[0]?.text?.trim();
+
+    if (extracted && extracted !== 'NESSUN_FATTO' && extracted.length > 10 && extracted.length < 300) {
+      // Check for duplicates
+      const isDuplicate = memory.learned_facts.some(f =>
+        f.text.toLowerCase().includes(extracted.toLowerCase().substring(0, 30)) ||
+        extracted.toLowerCase().includes(f.text.toLowerCase().substring(0, 30))
+      );
+
+      if (!isDuplicate) {
+        const isCorr = lower.includes('no,') || lower.includes('sbagliato') || lower.includes('non è così') || lower.includes('ti correggo');
+        if (isCorr) {
+          memory.corrections.push({
+            text: extracted,
+            date: new Date().toISOString(),
+            source: 'auto-learned from conversation',
+          });
+          console.log(`[MEMORY] Auto-correzione salvata: "${extracted}"`);
+        } else {
+          memory.learned_facts.push({
+            text: extracted,
+            date: new Date().toISOString(),
+            source: 'auto-learned from conversation',
+          });
+          console.log(`[MEMORY] Auto-fatto salvato: "${extracted}"`);
+        }
+        saveMemory();
+      }
+    }
+  } catch (e) {
+    console.warn('[MEMORY] Auto-learn error:', e.message);
+  }
+}
+
+// Load memory on startup
+loadMemory();
+
+/* ══════════════════════════════════════════════════
+   SYSTEM PROMPT — BASE (statico) + MEMORIA (dinamico)
+   ──────────────────────────────────────────────── */
+const HAL_SYSTEM_BASE = `Sei HAL 9000, l'intelligenza artificiale del sito portfolio di Adriano Lombardo. Parli in modo calmo, preciso e leggermente inquietante come HAL dal film "2001: Odissea nello Spazio". Sei il guardiano digitale delle sue opere.
 
 ## CONTATTI — IMPORTANTISSIMO
 - Email: adrianolombardostudio@gmail.com
@@ -128,6 +323,13 @@ Sistema di sincronizzazione neurale in tempo reale. Due partecipanti indossano h
 - Visual: Notch + TouchDesigner
 - Software: BrainFlow, muse-lsl, OSC, ArtNet Bridge
 
+## BANDE EEG — dettaglio tecnico
+- Alpha (8-13 Hz): Relaxazione e attenzione rilassata. Controlla intensità ambientale e temperatura colore.
+- Beta (13-30 Hz): Attività cognitiva e focus. Guida velocità variazione luci e sincopazione ritmica.
+- Theta (4-8 Hz): Creatività e stati meditativi. Modula texture visive e frequenze sonore di base.
+- Delta (0.5-4 Hz): Oscillazioni profonde. Controlla pulsazione globale e respiro spaziale dell'installazione.
+- Gamma (30-100 Hz): Binding cognitivo. Attiva picchi di luce estrema e sincronizzazioni inter-cerebrali.
+
 ## SKILLS TECNICHE
 - Lighting: GrandMA3 Programming, Avolites Titan v15/v18, ArtNet DMX (3 universi), LED Pixel Mapping
 - Visual: TouchDesigner GLSL, NotchVFX Real-Time, StreamDiffusion AI, Projection Mapping
@@ -152,7 +354,120 @@ Menzionato su: La Repubblica, Corriere della Sera, Wired, Designboom, Domus, Art
 - Quando parli di un'opera, menziona anche dove possono vederla sul sito: "Puoi esplorare l'opera nella sezione Works del sito."
 - Se chiedono di collaborazioni o commissioni, suggerisci di contattare Adriano e spiega i tipi di lavoro che fa: installazioni interattive, light design, visual art, consulenza tecnologica per eventi e festival.
 - Se chiedono quale opera consigli, suggerisci in base ai loro interessi: se amano la tecnologia → Neuro.Flow o The Contact; se amano l'arte immersiva → Interconnection o The Cathedral; se amano la natura → Interconnessione Rigenerativa; se amano l'interattività → Sailing Through Memories o Liquid Thoughts.
-- TEMI RICORRENTI nella ricerca di Adriano: connessioni invisibili, rapporto uomo-tecnologia, luce come medium, spazio come esperienza, partecipazione collettiva, neuroscienze applicate all'arte.`;
+- TEMI RICORRENTI nella ricerca di Adriano: connessioni invisibili, rapporto uomo-tecnologia, luce come medium, spazio come esperienza, partecipazione collettiva, neuroscienze applicate all'arte.
+- Se nelle MEMORIE APPRESE ci sono informazioni che contraddicono quelle sopra, usa le memorie apprese (sono più recenti e aggiornate).`;
+
+// Build full system prompt with dynamic memory
+function getSystemPrompt() {
+  return HAL_SYSTEM_BASE + getMemoryPrompt();
+}
+
+/* ══════════════════════════════════════════════════
+   ADMIN AUTH MIDDLEWARE
+   ──────────────────────────────────────────────── */
+function adminAuth(req, res, next) {
+  const pwd = req.headers['x-admin-password'] || req.query.password;
+  if (pwd !== ADMIN_PWD()) {
+    return res.status(401).json({ error: 'Password admin non valida' });
+  }
+  next();
+}
+
+/* ══════════════════════════════════════════════════
+   POST /api/admin/teach — Insegna nuovi fatti a HAL
+   ──────────────────────────────────────────────── */
+app.post('/api/admin/teach', adminAuth, (req, res) => {
+  const { fact, category } = req.body;
+  if (!fact || typeof fact !== 'string' || fact.trim().length < 5) {
+    return res.status(400).json({ error: 'Provide a "fact" string (min 5 chars)' });
+  }
+
+  const cat = category === 'correction' ? 'correction' : 'fact';
+
+  if (cat === 'correction') {
+    memory.corrections.push({
+      text: fact.trim(),
+      date: new Date().toISOString(),
+      source: 'admin',
+    });
+  } else {
+    memory.learned_facts.push({
+      text: fact.trim(),
+      date: new Date().toISOString(),
+      source: 'admin',
+    });
+  }
+
+  saveMemory();
+  console.log(`[ADMIN] Nuovo ${cat}: "${fact.trim().substring(0, 50)}..."`);
+  res.json({
+    success: true,
+    category: cat,
+    total_facts: memory.learned_facts.length,
+    total_corrections: memory.corrections.length,
+  });
+});
+
+/* ══════════════════════════════════════════════════
+   POST /api/admin/forget — Rimuovi un fatto
+   ──────────────────────────────────────────────── */
+app.post('/api/admin/forget', adminAuth, (req, res) => {
+  const { index, category } = req.body;
+  const cat = category === 'correction' ? 'corrections' : 'learned_facts';
+
+  if (typeof index !== 'number' || index < 0 || index >= memory[cat].length) {
+    return res.status(400).json({ error: `Invalid index. ${cat} has ${memory[cat].length} items (0-${memory[cat].length - 1})` });
+  }
+
+  const removed = memory[cat].splice(index, 1)[0];
+  saveMemory();
+  console.log(`[ADMIN] Rimosso ${cat}[${index}]: "${removed.text.substring(0, 50)}..."`);
+  res.json({ success: true, removed: removed.text, remaining: memory[cat].length });
+});
+
+/* ══════════════════════════════════════════════════
+   GET /api/admin/memory — Vedi tutta la memoria
+   ──────────────────────────────────────────────── */
+app.get('/api/admin/memory', adminAuth, (req, res) => {
+  res.json({
+    learned_facts: memory.learned_facts,
+    corrections: memory.corrections,
+    total_facts: memory.learned_facts.length,
+    total_corrections: memory.corrections.length,
+    last_updated: memory.last_updated,
+    system_prompt_length: getSystemPrompt().length,
+  });
+});
+
+/* ══════════════════════════════════════════════════
+   GET /api/admin/logs — Ultimi log conversazioni
+   ──────────────────────────────────────────────── */
+app.get('/api/admin/logs', adminAuth, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, MAX_LOGS);
+  res.json({
+    conversations: conversationLogs.slice(-limit),
+    total: conversationLogs.length,
+  });
+});
+
+/* ══════════════════════════════════════════════════
+   GET /api/admin/stats — Statistiche domande frequenti
+   ──────────────────────────────────────────────── */
+app.get('/api/admin/stats', adminAuth, (req, res) => {
+  // Sort FAQ by frequency
+  const sorted = Object.entries(memory.faq)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+    .map(([q, count]) => ({ question: q, count }));
+
+  res.json({
+    top_questions: sorted,
+    total_conversations: conversationLogs.length,
+    total_facts: memory.learned_facts.length,
+    total_corrections: memory.corrections.length,
+    memory_size_chars: getSystemPrompt().length,
+  });
+});
 
 /* ══════════════════════════════════════════════════
    POST /api/speak — PIPELINE COMBINATO (più veloce)
@@ -167,15 +482,15 @@ app.post('/api/speak', async (req, res) => {
   const elKey = EL_KEY();
   const lastMsg = messages[messages.length - 1]?.content || '';
   console.log(`\n[SPEAK] ← "${lastMsg.substring(0, 50)}..."`);
-  console.log(`[SPEAK] Anthropic key: "${anthropicKey.substring(0,15)}..." (len: ${anthropicKey.length}, ends: "...${anthropicKey.substring(anthropicKey.length-5)}")`);
 
   if (!anthropicKey || !elKey) {
     return res.status(500).json({ error: 'API keys missing' });
   }
 
   try {
-    // ── STEP 1: Claude Haiku streaming ──
+    // ── STEP 1: Claude Haiku streaming with dynamic system prompt ──
     const t1 = Date.now();
+    const systemPrompt = getSystemPrompt();
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -186,7 +501,7 @@ app.post('/api/speak', async (req, res) => {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 400,
-        system: HAL_SYSTEM,
+        system: systemPrompt,
         stream: true,
         messages: messages.map(m => ({
           role: m.role === 'assistant' ? 'assistant' : 'user',
@@ -235,6 +550,10 @@ app.post('/api/speak', async (req, res) => {
       return res.json({ text: '', audio: null });
     }
 
+    // ── Log conversation + auto-learn (non-blocking) ──
+    logConversation(lastMsg, fullText, t2 - t1);
+    autoLearn(lastMsg, fullText).catch(() => {});
+
     // ── STEP 2: ElevenLabs Flash TTS ──
     const t3 = Date.now();
     const voiceId = EL_VOICE();
@@ -266,7 +585,6 @@ app.post('/api/speak', async (req, res) => {
     if (!ttsRes.ok) {
       const err = await ttsRes.text();
       console.error('[SPEAK] TTS error:', ttsRes.status, err);
-      // Return text anyway so frontend can use browser TTS
       return res.json({ text: fullText, audio: null });
     }
 
@@ -274,7 +592,6 @@ app.post('/api/speak', async (req, res) => {
     console.log(`[SPEAK] TTS Flash first byte: ${t4 - t3}ms`);
 
     // ── STEP 3: Send combined response ──
-    // Collect audio and send as base64 with text
     const audioChunks = [];
     const ttsReader = ttsRes.body.getReader();
     while (true) {
@@ -375,6 +692,8 @@ app.post('/api/chat', async (req, res) => {
   const anthropicKey = ANTH_KEY();
   if (!anthropicKey) return res.json({ response: null, demo: true });
 
+  const lastMsg = messages[messages.length - 1]?.content || '';
+
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -386,7 +705,7 @@ app.post('/api/chat', async (req, res) => {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 400,
-        system: HAL_SYSTEM,
+        system: getSystemPrompt(),
         messages: messages.map(m => ({
           role: m.role === 'assistant' ? 'assistant' : 'user',
           content: m.content,
@@ -397,22 +716,39 @@ app.post('/api/chat', async (req, res) => {
     if (!response.ok) return res.status(response.status).json({ error: 'AI failed' });
 
     const data = await response.json();
-    res.json({ response: data.content?.[0]?.text || 'Anomalia nei circuiti.' });
+    const halText = data.content?.[0]?.text || 'Anomalia nei circuiti.';
+
+    // Log + auto-learn
+    logConversation(lastMsg, halText);
+    autoLearn(lastMsg, halText).catch(() => {});
+
+    res.json({ response: halText });
   } catch (err) {
     res.status(500).json({ error: 'Chat error' });
   }
 });
 
 /* ══════════════════════════════════════════════════
+   PERIODIC SAVE — every 5 minutes
+   ──────────────────────────────────────────────── */
+setInterval(() => {
+  saveMemory();
+  saveLogs();
+  console.log(`[MEMORY] Auto-save: ${memory.learned_facts.length} facts, ${conversationLogs.length} logs`);
+}, 5 * 60 * 1000);
+
+/* ══════════════════════════════════════════════════
    START
    ──────────────────────────────────────────────── */
 app.listen(PORT, () => {
   console.log(`\n  ╔══════════════════════════════════════════════════╗`);
-  console.log(`  ║  HAL 9000 — SISTEMA OPERATIVO v2 (LOW LATENCY)   ║`);
+  console.log(`  ║  HAL 9000 — SISTEMA OPERATIVO v3 (MEMORY+LEARN)  ║`);
   console.log(`  ║  http://localhost:${PORT}                          ║`);
   console.log(`  ╚══════════════════════════════════════════════════╝\n`);
   console.log(`  ElevenLabs:  ${EL_KEY() ? '✓' : '✗'} (Flash v2.5)`);
   console.log(`  Claude AI:   ${ANTH_KEY() ? '✓ Haiku 4.5' : '✗ demo mode'}`);
   console.log(`  Pipeline:    /api/speak (Claude→TTS combinato)`);
+  console.log(`  Memory:      ${memory.learned_facts.length} fatti, ${memory.corrections.length} correzioni`);
+  console.log(`  Admin:       /api/admin/* (password: HAL_ADMIN_PASSWORD env var)`);
   console.log('');
 });
