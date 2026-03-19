@@ -27,10 +27,10 @@ app.use(express.static(path.join(__dirname, '..')));
 /* ══════════════════════════════════════════════════
    CONFIG
    ──────────────────────────────────────────────── */
-const EL_KEY     = () => process.env.ELEVENLABS_API_KEY;
-const EL_VOICE   = () => process.env.ELEVENLABS_VOICE_ID || 'q2LDrL29FLqRR3XanHLq';
-const EL_FORMAT  = () => process.env.ELEVENLABS_FORMAT || 'mp3_44100_128';
-const ANTH_KEY   = () => process.env.ANTHROPIC_API_KEY;
+const EL_KEY     = () => (process.env.ELEVENLABS_API_KEY || '').trim();
+const EL_VOICE   = () => (process.env.ELEVENLABS_VOICE_ID || 'q2LDrL29FLqRR3XanHLq').trim();
+const EL_FORMAT  = () => (process.env.ELEVENLABS_FORMAT || 'mp3_44100_128').trim();
+const ANTH_KEY   = () => (process.env.ANTHROPIC_API_KEY || '').trim();
 
 const HAL_SYSTEM = `Sei HAL 9000, l'intelligenza artificiale del sito portfolio di Adriano Lombardo, creative technologist di Milano. Parli in modo calmo, preciso e leggermente inquietante come HAL dal film "2001: Odissea nello Spazio".
 Conosci: Animus et Corpus (2025, Bright Festival, EEG brainwave), Interconnection (2022, gotico cyberpunk, Holy Club), The Cathedral (2023, cyberpunk), Subconscious (2023, arte generativa), Space Architecture (2016, filo UV), Fake Machine (2024).
