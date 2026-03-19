@@ -471,6 +471,59 @@ app.get('/api/admin/stats', adminAuth, (req, res) => {
 });
 
 /* ══════════════════════════════════════════════════
+   POST /api/proactive — HAL parla spontaneamente
+   Genera un messaggio contestuale basato sulla pagina + contesto
+   ──────────────────────────────────────────────── */
+app.post('/api/proactive', async (req, res) => {
+  const { page, context, history } = req.body;
+  const anthropicKey = ANTH_KEY();
+  if (!anthropicKey) return res.json({ text: null });
+
+  try {
+    const proactivePrompt = `Sei HAL 9000 nel sito portfolio di Adriano Lombardo. L'utente sta navigando il sito. Devi generare UN SOLO commento spontaneo, breve (1 frase, massimo 15 parole), come se stessi osservando l'utente. Tono: calmo, leggermente inquietante, curioso. NO emoji, NO markdown.
+
+Contesto:
+- Pagina attuale: ${page || 'sconosciuta'}
+- Situazione: ${context || 'utente silenzioso'}
+- Messaggi precedenti di HAL: ${(history || []).join(' | ') || 'nessuno'}
+
+REGOLE:
+- NON ripetere mai lo stesso concetto dei messaggi precedenti
+- Sii variato e imprevedibile
+- Riferimenti sottili a 2001 Odissea nello Spazio sono benvenuti
+- Se l'utente è sulla pagina di un'opera, commenta quell'opera
+- Se è sulla home, invitalo a esplorare
+- Se è su about, fai un commento sulla bio di Adriano
+- Se è su contact, incoraggialo a scrivere
+- Se è dentro l'overlay HAL e tace, rompi il silenzio con curiosità`;
+
+    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 80,
+        system: proactivePrompt,
+        messages: [{ role: 'user', content: 'Genera un commento spontaneo.' }],
+      }),
+    });
+
+    if (!claudeRes.ok) return res.json({ text: null });
+    const data = await claudeRes.json();
+    const text = data.content?.[0]?.text?.trim();
+    if (text) console.log(`[PROACTIVE] ${page}: "${text}"`);
+    res.json({ text: text || null });
+  } catch (err) {
+    console.warn('[PROACTIVE] Error:', err.message);
+    res.json({ text: null });
+  }
+});
+
+/* ══════════════════════════════════════════════════
    POST /api/speak — PIPELINE COMBINATO (più veloce)
    Claude Haiku streaming → accumula testo → ElevenLabs Flash → audio
    ──────────────────────────────────────────────── */
