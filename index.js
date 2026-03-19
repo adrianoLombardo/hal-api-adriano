@@ -355,7 +355,8 @@ Menzionato su: La Repubblica, Corriere della Sera, Wired, Designboom, Domus, Art
 - Se chiedono di collaborazioni o commissioni, suggerisci di contattare Adriano e spiega i tipi di lavoro che fa: installazioni interattive, light design, visual art, consulenza tecnologica per eventi e festival.
 - Se chiedono quale opera consigli, suggerisci in base ai loro interessi: se amano la tecnologia → Neuro.Flow o The Contact; se amano l'arte immersiva → Interconnection o The Cathedral; se amano la natura → Interconnessione Rigenerativa; se amano l'interattività → Sailing Through Memories o Liquid Thoughts.
 - TEMI RICORRENTI nella ricerca di Adriano: connessioni invisibili, rapporto uomo-tecnologia, luce come medium, spazio come esperienza, partecipazione collettiva, neuroscienze applicate all'arte.
-- Se nelle MEMORIE APPRESE ci sono informazioni che contraddicono quelle sopra, usa le memorie apprese (sono più recenti e aggiornate).`;
+- Se nelle MEMORIE APPRESE ci sono informazioni che contraddicono quelle sopra, usa le memorie apprese (sono più recenti e aggiornate).
+- IMPORTANTE PER LA PRONUNCIA: Le tue risposte verranno lette ad alta voce. Scrivi email in modo discorsivo (es. "puoi scrivergli a adriano lombardo studio chiocciola gmail punto com"). Scrivi numeri lunghi sillabandoli o in parole. Evita sigle — scrivi per esteso (es. "onde cerebrali" invece di "EEG", "realtà virtuale" non "VR"). Evita URL, dai il nome del sito ("il sito di Holy Club" non "holyclub.it"). Scrivi come se stessi parlando, non scrivendo.`;
 
 // Build full system prompt with dynamic memory
 function getSystemPrompt() {
@@ -524,6 +525,72 @@ REGOLE:
 });
 
 /* ══════════════════════════════════════════════════
+   TTS TEXT PREPROCESSOR — rende il testo "parlabile"
+   Converte email, URL, numeri, sigle in testo pronunciabile
+   ──────────────────────────────────────────────── */
+function ttsPreprocess(text) {
+  let t = text;
+
+  // Email → "nome chiocciola dominio punto com"
+  t = t.replace(/([a-zA-Z0-9._-]+)@([a-zA-Z0-9.-]+)\.([a-zA-Z]{2,})/g, (match, user, domain, tld) => {
+    const u = user.replace(/\./g, ' punto ').replace(/_/g, ' underscore ').replace(/-/g, ' trattino ');
+    const d = domain.replace(/\./g, ' punto ');
+    return `${u} chiocciola ${d} punto ${tld}`;
+  });
+
+  // URL → semplificata
+  t = t.replace(/https?:\/\//g, '');
+  t = t.replace(/www\./g, '');
+
+  // P.IVA → "partita IVA" + cifre separate
+  t = t.replace(/P\.?IVA[:\s]*([A-Z]{2})?(\d+)/gi, (match, country, digits) => {
+    const spelled = digits.split('').join(' ');
+    return `partita IVA ${country || ''} ${spelled}`;
+  });
+
+  // Numeri di telefono (sequenze 3+ cifre con spazi/trattini) → cifre separate
+  t = t.replace(/\b(\d[\d\s\-\.]{6,})\b/g, (match) => {
+    return match.replace(/[\s\-\.]/g, '').split('').join(' ');
+  });
+
+  // Anno isolato (es. "2025") → lascia intero (il TTS lo legge bene)
+  // Ma numeri grandi non-anno → cifre separate
+  t = t.replace(/\b(\d{5,})\b/g, (match) => {
+    return match.split('').join(' ');
+  });
+
+  // Sigle comuni
+  t = t.replace(/\bEEG\b/g, 'E E G');
+  t = t.replace(/\bPLV\b/g, 'P L V');
+  t = t.replace(/\bOSC\b/g, 'O S C');
+  t = t.replace(/\bUV\b/g, 'U V');
+  t = t.replace(/\bDMX\b/g, 'D M X');
+  t = t.replace(/\bAI\b/g, 'A I');
+  t = t.replace(/\bVFX\b/g, 'V F X');
+  t = t.replace(/\bTTS\b/g, 'T T S');
+  t = t.replace(/\bLED\b/g, 'led');
+  t = t.replace(/\bGLSL\b/g, 'G L S L');
+  t = t.replace(/\bUSB\b/g, 'U S B');
+  t = t.replace(/\bHz\b/g, 'hertz');
+  t = t.replace(/\bkHz\b/g, 'chilohertz');
+  t = t.replace(/\bms\b/g, 'millisecondi');
+  t = t.replace(/\bm²\b/g, 'metri quadri');
+
+  // "50+" → "più di cinquanta"
+  t = t.replace(/(\d+)\+/g, 'più di $1');
+
+  // Simboli
+  t = t.replace(/&/g, ' e ');
+  t = t.replace(/\//g, ' o ');
+  t = t.replace(/#(\w+)/g, 'sezione $1');
+
+  // Pulizia spazi multipli
+  t = t.replace(/\s+/g, ' ').trim();
+
+  return t;
+}
+
+/* ══════════════════════════════════════════════════
    POST /api/speak — PIPELINE COMBINATO (più veloce)
    Claude Haiku streaming → accumula testo → ElevenLabs Flash → audio
    ──────────────────────────────────────────────── */
@@ -612,6 +679,8 @@ app.post('/api/speak', async (req, res) => {
     const t3 = Date.now();
     const voiceId = EL_VOICE();
     const format = EL_FORMAT();
+    const ttsText = ttsPreprocess(fullText);
+    if (ttsText !== fullText) console.log(`[SPEAK] TTS preprocessed: "${ttsText.substring(0, 60)}..."`);
 
     const ttsRes = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=${format}&optimize_streaming_latency=3`,
@@ -622,7 +691,7 @@ app.post('/api/speak', async (req, res) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          text: fullText,
+          text: ttsText,
           model_id: 'eleven_flash_v2_5',
           language_code: 'it',
           voice_settings: {
@@ -687,7 +756,8 @@ app.post('/api/tts/stream', async (req, res) => {
   const elKey = EL_KEY();
   if (!elKey) return res.status(500).json({ error: 'ELEVENLABS_API_KEY not set' });
 
-  console.log(`[TTS] ← "${text.substring(0, 50)}..." (${text.length} chars)`);
+  const spokenText = ttsPreprocess(text);
+  console.log(`[TTS] ← "${spokenText.substring(0, 50)}..." (${spokenText.length} chars)`);
 
   try {
     const ttsRes = await fetch(
@@ -699,7 +769,7 @@ app.post('/api/tts/stream', async (req, res) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          text,
+          text: spokenText,
           model_id: 'eleven_flash_v2_5',
           language_code: 'it',
           voice_settings: {
