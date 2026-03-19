@@ -51,6 +51,7 @@ app.post('/api/speak', async (req, res) => {
   const elKey = EL_KEY();
   const lastMsg = messages[messages.length - 1]?.content || '';
   console.log(`\n[SPEAK] ← "${lastMsg.substring(0, 50)}..."`);
+  console.log(`[SPEAK] Anthropic key: "${anthropicKey.substring(0,15)}..." (len: ${anthropicKey.length}, ends: "...${anthropicKey.substring(anthropicKey.length-5)}")`);
 
   if (!anthropicKey || !elKey) {
     return res.status(500).json({ error: 'API keys missing' });
