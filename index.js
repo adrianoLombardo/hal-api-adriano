@@ -366,8 +366,9 @@ function getSystemPrompt() {
    ADMIN AUTH MIDDLEWARE
    ──────────────────────────────────────────────── */
 function adminAuth(req, res, next) {
-  const pwd = req.headers['x-admin-password'] || req.query.password;
+  const pwd = req.headers['x-admin-password'] || req.query.password || req.body?.password;
   if (pwd !== ADMIN_PWD()) {
+    console.log(`[ADMIN] Auth failed. Got: "${pwd}", expected: "${ADMIN_PWD().substring(0,3)}..."`);
     return res.status(401).json({ error: 'Password admin non valida' });
   }
   next();
