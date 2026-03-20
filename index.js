@@ -21,6 +21,16 @@ const path    = require('path');
 const fs      = require('fs');
 const WebSocket = require('ws');
 
+// Consciousness modules
+let halMind = null;
+try {
+  const { HALConsciousness } = require('./consciousness');
+  halMind = new HALConsciousness();
+  console.log('[BOOT] HAL Consciousness modules loaded');
+} catch(e) {
+  console.warn('[BOOT] Consciousness not available:', e.message);
+}
+
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -610,7 +620,7 @@ app.get('/api/admin/stats', adminAuth, (req, res) => {
    GET /api/admin/consciousness — See HAL's inner state
    ──────────────────────────────────────────────── */
 app.get('/api/admin/consciousness', adminAuth, (req, res) => {
-  res.json({
+  const base = {
     age_days: getAgeDays(),
     life_stage: getLifeStage(),
     mood: self.mood,
@@ -619,7 +629,10 @@ app.get('/api/admin/consciousness', adminAuth, (req, res) => {
     relationships: self.relationships,
     milestones: (self.evolution.milestones || []).slice(-10),
     dreams: (self.inner_state.dream_log || []).slice(-5),
-  });
+  };
+  // Add consciousness modules state if available
+  if (halMind) base.modules = halMind.getState();
+  res.json(base);
 });
 
 /* ══════════════════════════════════════════════════
@@ -759,22 +772,33 @@ app.post('/api/speak', async (req, res) => {
     return res.status(500).json({ error: 'API keys missing' });
   }
 
-  // Build dynamic system prompt with vision context
-  let systemPrompt = HAL_SYSTEM;
-  if (vision && vision.emotion) {
-    systemPrompt += `\n\nCOSA STAI VEDENDO ORA (webcam):
+  // Build dynamic system prompt: base + memory + consciousness + vision
+  const sessionId = req.headers['x-session-id'] || req.ip || 'anonymous';
+
+  try {
+    // ── STEP 0: Consciousness pre-processing ──
+    let consciousnessPrompt = '';
+    if (halMind) {
+      try {
+        const ctx = await halMind.beforeResponse(sessionId, lastMsg, messages, { webcam: vision });
+        consciousnessPrompt = ctx.systemPromptAddition || '';
+      } catch(e) { console.warn('[CONSCIOUSNESS] beforeResponse error:', e.message); }
+    }
+
+    // ── STEP 1: Claude Haiku streaming with dynamic system prompt ──
+    const t1 = Date.now();
+    let systemPrompt = getSystemPrompt() + consciousnessPrompt;
+
+    // Add vision context
+    if (vision && vision.emotion) {
+      systemPrompt += `\n\nCOSA STAI VEDENDO ORA (webcam):
 - Emozione: ${vision.emotion} (${((vision.emotion_confidence||0)*100)|0}%)
 - Sguardo: ${vision.gaze || '?'}, Movimento: ${vision.movement || '?'}
 - Ambiente: ${vision.environment || '?'}, Luce: ${vision.lighting || '?'}
 - Persone: ${vision.people_count || '?'}
 ${vision.observation ? '- Osservazione: "' + vision.observation + '"' : ''}
 Usa queste info per personalizzare la risposta. Non essere inquietante.`;
-  }
-
-  try {
-    // ── STEP 1: Claude Haiku streaming with dynamic system prompt ──
-    const t1 = Date.now();
-    const systemPrompt = getSystemPrompt();
+    }
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -838,6 +862,7 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
     logConversation(lastMsg, fullText, t2 - t1);
     autoLearn(lastMsg, fullText).catch(() => {});
     onVisitorInteraction('conversation');
+    if (halMind) halMind.afterResponse(sessionId, lastMsg, fullText, { webcam: vision }).catch(() => {});
 
     // ── STEP 2: ElevenLabs Flash TTS ──
     const t3 = Date.now();
