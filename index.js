@@ -51,6 +51,13 @@ let memory = {
   learned_facts: [],     // Fatti insegnati da admin o auto-appresi
   corrections: [],       // Correzioni ricevute
   faq: {},               // Domande frequenti { question: count }
+  vision_patterns: {     // Pattern visivi aggregati nel tempo
+    total_sessions: 0,
+    total_frames: 0,
+    emotion_totals: {},  // { happy: 42, sad: 5, ... }
+    page_emotions: {},   // { home: { happy: 10, focused: 3 }, ... }
+    observations: [],    // ultime 20 osservazioni notevoli
+  },
   last_updated: null,
 };
 
@@ -142,6 +149,29 @@ function getMemoryPrompt() {
     memory.corrections.forEach((c, i) => {
       memorySection += `${i + 1}. ${c.text}\n`;
     });
+  }
+
+  // Vision patterns — HAL's evolving understanding of visitors
+  const vp = memory.vision_patterns;
+  if (vp && vp.total_sessions > 0) {
+    memorySection += `\n\n## ESPERIENZA VISIVA (cosa hai imparato osservando i visitatori)
+- Sessioni totali: ${vp.total_sessions}, frame analizzati: ${vp.total_frames || 0}`;
+    const topEmotions = Object.entries(vp.emotion_totals || {}).sort((a,b) => b[1] - a[1]).slice(0, 4);
+    if (topEmotions.length > 0) {
+      memorySection += `\n- Emozioni più frequenti: ${topEmotions.map(([e, c]) => e + ' (' + c + 'x)').join(', ')}`;
+    }
+    const pageInsights = Object.entries(vp.page_emotions || {}).map(([page, emotions]) => {
+      const top = Object.entries(emotions).sort((a,b) => b[1] - a[1])[0];
+      return top ? `${page}→${top[0]}` : null;
+    }).filter(Boolean);
+    if (pageInsights.length > 0) {
+      memorySection += `\n- Emozione dominante per pagina: ${pageInsights.join(', ')}`;
+    }
+    const recentObs = (vp.observations || []).slice(-3);
+    if (recentObs.length > 0) {
+      memorySection += `\n- Ultime osservazioni: ${recentObs.map(o => '"' + o.text + '"').join(' | ')}`;
+    }
+    memorySection += '\nUsa questa esperienza per capire meglio i visitatori e adattare il tuo tono.\n';
   }
 
   return memorySection;
@@ -932,7 +962,24 @@ RISPONDI SOLO con il JSON.`;
     try {
       const analysis = JSON.parse(text);
       console.log(`[VISION] ${analysis.emotion} (${analysis.emotion_confidence}) - "${analysis.observation}"`);
-      logConversation('[VISION] ' + (analysis.emotion || 'neutral'), analysis.observation || '');
+
+      // Accumulate vision patterns in memory
+      const vp = memory.vision_patterns;
+      vp.total_frames = (vp.total_frames || 0) + 1;
+      const emo = analysis.emotion || 'neutral';
+      vp.emotion_totals[emo] = (vp.emotion_totals[emo] || 0) + 1;
+      const page = context?.page || 'unknown';
+      if (!vp.page_emotions[page]) vp.page_emotions[page] = {};
+      vp.page_emotions[page][emo] = (vp.page_emotions[page][emo] || 0) + 1;
+
+      // Save notable observations (non-neutral, high confidence)
+      if (analysis.observation && emo !== 'neutral' && (analysis.emotion_confidence || 0) > 0.6) {
+        if (!vp.observations) vp.observations = [];
+        vp.observations.push({ text: analysis.observation, emotion: emo, page, date: new Date().toISOString() });
+        if (vp.observations.length > 20) vp.observations.shift();
+      }
+
+      logConversation('[VISION] ' + emo, analysis.observation || '');
       res.json(analysis);
     } catch (e) {
       res.json({ face_detected: false, emotion: 'neutral', observation: text.substring(0, 100) });
@@ -954,11 +1001,42 @@ app.post('/api/vision/summary', async (req, res) => {
   emotions.forEach(e => counts[e] = (counts[e] || 0) + 1);
   const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
 
+  // Update session count
+  memory.vision_patterns.total_sessions = (memory.vision_patterns.total_sessions || 0) + 1;
+
   logConversation(
     `[VISION-SUMMARY] ${duration_seconds}s, ${messages_count} msg, page: ${page}`,
     `Dominante: ${dominant?.[0] || 'neutral'}, distribuzione: ${JSON.stringify(counts)}`
   );
-  console.log(`[VISION] Sessione: ${duration_seconds}s, dominante: ${dominant?.[0] || 'neutral'}`);
+
+  // Auto-learn from significant sessions (long sessions with strong emotions)
+  if (duration_seconds > 60 && dominant && dominant[0] !== 'neutral' && dominant[1] >= 3) {
+    const sessionCount = memory.vision_patterns.total_sessions;
+    const insight = `Sessione #${sessionCount}: visitatore prevalentemente ${dominant[0]} sulla pagina ${page || 'sconosciuta'} per ${Math.round(duration_seconds/60)} minuti`;
+
+    // Only save if we have enough sessions to find patterns (every 5 sessions)
+    if (sessionCount % 5 === 0 && sessionCount > 0) {
+      const vp = memory.vision_patterns;
+      const topEmotion = Object.entries(vp.emotion_totals || {}).sort((a,b) => b[1] - a[1])[0];
+      if (topEmotion) {
+        const patternFact = `Pattern visivo dopo ${sessionCount} sessioni: i visitatori sono prevalentemente "${topEmotion[0]}" (${topEmotion[1]} rilevamenti). Le pagine più emotive: ${Object.entries(vp.page_emotions || {}).map(([p, e]) => { const top = Object.entries(e).sort((a,b)=>b[1]-a[1])[0]; return top ? p + '→' + top[0] : null; }).filter(Boolean).join(', ')}`;
+
+        // Check for duplicates
+        const isDuplicate = memory.learned_facts.some(f => f.text.includes('Pattern visivo dopo'));
+        if (isDuplicate) {
+          // Update existing pattern fact
+          const idx = memory.learned_facts.findIndex(f => f.text.includes('Pattern visivo dopo'));
+          if (idx >= 0) memory.learned_facts[idx] = { text: patternFact, date: new Date().toISOString(), source: 'vision-auto-learn' };
+        } else {
+          memory.learned_facts.push({ text: patternFact, date: new Date().toISOString(), source: 'vision-auto-learn' });
+        }
+        console.log(`[VISION] Pattern appreso: "${patternFact.substring(0, 80)}..."`);
+      }
+    }
+    saveMemory();
+  }
+
+  console.log(`[VISION] Sessione #${memory.vision_patterns.total_sessions}: ${duration_seconds}s, dominante: ${dominant?.[0] || 'neutral'}`);
   res.json({ ok: true });
 });
 
