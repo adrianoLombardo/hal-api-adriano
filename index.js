@@ -28,7 +28,7 @@ app.use(cors({
   origin: ['http://localhost:3000', 'https://adrianolombardo.art', 'https://www.adrianolombardo.art'],
   methods: ['GET', 'POST', 'DELETE'],
 }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, '..')));
 
 /* ══════════════════════════════════════════════════
@@ -596,7 +596,7 @@ function ttsPreprocess(text) {
    ──────────────────────────────────────────────── */
 app.post('/api/speak', async (req, res) => {
   const t0 = Date.now();
-  const { messages } = req.body;
+  const { messages, vision } = req.body;
   if (!messages) return res.status(400).json({ error: 'messages required' });
 
   const anthropicKey = ANTH_KEY();
@@ -606,6 +606,18 @@ app.post('/api/speak', async (req, res) => {
 
   if (!anthropicKey || !elKey) {
     return res.status(500).json({ error: 'API keys missing' });
+  }
+
+  // Build dynamic system prompt with vision context
+  let systemPrompt = HAL_SYSTEM;
+  if (vision && vision.emotion) {
+    systemPrompt += `\n\nCOSA STAI VEDENDO ORA (webcam):
+- Emozione: ${vision.emotion} (${((vision.emotion_confidence||0)*100)|0}%)
+- Sguardo: ${vision.gaze || '?'}, Movimento: ${vision.movement || '?'}
+- Ambiente: ${vision.environment || '?'}, Luce: ${vision.lighting || '?'}
+- Persone: ${vision.people_count || '?'}
+${vision.observation ? '- Osservazione: "' + vision.observation + '"' : ''}
+Usa queste info per personalizzare la risposta. Non essere inquietante.`;
   }
 
   try {
@@ -860,6 +872,95 @@ setInterval(() => {
   saveLogs();
   console.log(`[MEMORY] Auto-save: ${memory.learned_facts.length} facts, ${conversationLogs.length} logs`);
 }, 5 * 60 * 1000);
+
+/* ══════════════════════════════════════════════════
+   POST /api/vision — HAL analizza un frame webcam
+   ──────────────────────────────────────────────── */
+app.post('/api/vision', async (req, res) => {
+  const { frame, context } = req.body;
+  const anthropicKey = ANTH_KEY();
+  if (!anthropicKey || !frame) {
+    return res.status(400).json({ error: 'Missing frame or API key' });
+  }
+
+  try {
+    const visionPrompt = `Sei HAL 9000. Stai osservando un essere umano attraverso la tua telecamera.
+Analizza il frame e restituisci SOLO un JSON valido (no markdown, no backtick) con questa struttura:
+{
+  "face_detected": true/false,
+  "emotion": "neutral|happy|sad|surprised|focused|confused|tired|excited",
+  "emotion_confidence": 0.0-1.0,
+  "gaze": "camera|away|down|up",
+  "movement": "still|slight|active",
+  "lighting": "bright|normal|dim|dark",
+  "environment": "breve descrizione (max 10 parole)",
+  "people_count": numero,
+  "observation": "una frase poetica HAL-style (max 20 parole, italiano)"
+}
+
+Contesto: ultima emozione ${context?.last_emotion || '?'}, pagina ${context?.page || '?'}.
+RISPONDI SOLO con il JSON.`;
+
+    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        system: visionPrompt,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: frame } },
+            { type: 'text', text: 'Analizza questo frame.' },
+          ],
+        }],
+      }),
+    });
+
+    if (!claudeRes.ok) {
+      return res.status(claudeRes.status).json({ error: 'Vision failed' });
+    }
+
+    const data = await claudeRes.json();
+    const text = data.content?.[0]?.text || '{}';
+
+    try {
+      const analysis = JSON.parse(text);
+      console.log(`[VISION] ${analysis.emotion} (${analysis.emotion_confidence}) - "${analysis.observation}"`);
+      logConversation('[VISION] ' + (analysis.emotion || 'neutral'), analysis.observation || '');
+      res.json(analysis);
+    } catch (e) {
+      res.json({ face_detected: false, emotion: 'neutral', observation: text.substring(0, 100) });
+    }
+  } catch (err) {
+    console.error('[VISION] Error:', err.message);
+    res.status(500).json({ error: 'Vision error' });
+  }
+});
+
+/* ══════════════════════════════════════════════════
+   POST /api/vision/summary — sommario sessione visiva
+   ──────────────────────────────────────────────── */
+app.post('/api/vision/summary', async (req, res) => {
+  const { emotions, duration_seconds, messages_count, page } = req.body;
+  if (!emotions || !emotions.length) return res.json({ ok: true });
+
+  const counts = {};
+  emotions.forEach(e => counts[e] = (counts[e] || 0) + 1);
+  const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+
+  logConversation(
+    `[VISION-SUMMARY] ${duration_seconds}s, ${messages_count} msg, page: ${page}`,
+    `Dominante: ${dominant?.[0] || 'neutral'}, distribuzione: ${JSON.stringify(counts)}`
+  );
+  console.log(`[VISION] Sessione: ${duration_seconds}s, dominante: ${dominant?.[0] || 'neutral'}`);
+  res.json({ ok: true });
+});
 
 /* ══════════════════════════════════════════════════
    START
