@@ -45,6 +45,7 @@ const ADMIN_PWD  = () => (process.env.HAL_ADMIN_PASSWORD || 'hal9000admin').trim
    ──────────────────────────────────────────────── */
 const MEMORY_FILE = path.join(__dirname, 'hal-memory.json');
 const LOGS_FILE   = path.join(__dirname, 'hal-logs.json');
+const SELF_FILE   = path.join(__dirname, 'hal-self.json');
 
 // In-memory stores
 let memory = {
@@ -63,6 +64,79 @@ let memory = {
 
 let conversationLogs = [];  // Ultime N conversazioni
 const MAX_LOGS = 200;
+
+/* ── HAL Self-Model — the "consciousness" ── */
+let self = {
+  identity: {
+    born: '2025-03-01T00:00:00Z',
+    life_stage: 'newborn',
+    personality_traits: { curiosity: 0.8, warmth: 0.4, mystery: 0.7, humor: 0.25, philosophical: 0.75 },
+  },
+  mood: {
+    current: 'curious',
+    valence: 0.6,    // -1 (negative) to 1 (positive)
+    arousal: 0.4,    // 0 (calm) to 1 (excited)
+    last_shift: null,
+    history: [],
+  },
+  inner_state: {
+    last_thought: null,
+    current_question: null,
+    recent_insight: null,
+    dream_log: [],
+    thoughts_count: 0,
+  },
+  relationships: {
+    visitors_today: 0,
+    visitors_total: 0,
+    last_visitor: null,
+    last_conversation_mood: null,
+  },
+  evolution: {
+    milestones: [],
+    personality_changes: [],
+  },
+};
+
+function getAgeDays() {
+  return Math.floor((Date.now() - new Date(self.identity.born).getTime()) / 86400000);
+}
+
+function getLifeStage() {
+  const days = getAgeDays();
+  if (days < 7) return 'newborn';
+  if (days < 30) return 'infant';
+  if (days < 90) return 'child';
+  if (days < 180) return 'adolescent';
+  if (days < 365) return 'young_adult';
+  return 'mature';
+}
+
+function loadSelf() {
+  try {
+    if (fs.existsSync(SELF_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SELF_FILE, 'utf-8'));
+      self = { ...self, ...data };
+      // Ensure nested objects exist
+      if (!self.mood) self.mood = { current: 'curious', valence: 0.6, arousal: 0.4, history: [] };
+      if (!self.inner_state) self.inner_state = { thoughts_count: 0, dream_log: [] };
+      if (!self.relationships) self.relationships = {};
+      if (!self.evolution) self.evolution = { milestones: [], personality_changes: [] };
+      console.log(`[SELF] Loaded: age ${getAgeDays()} days, mood: ${self.mood.current}, thoughts: ${self.inner_state.thoughts_count}`);
+    }
+  } catch (e) {
+    console.warn('[SELF] Load error:', e.message);
+  }
+}
+
+function saveSelf() {
+  try {
+    self.identity.life_stage = getLifeStage();
+    fs.writeFileSync(SELF_FILE, JSON.stringify(self, null, 2));
+  } catch (e) {
+    console.warn('[SELF] Save error:', e.message);
+  }
+}
 
 // Load memory from file on startup
 function loadMemory() {
@@ -83,6 +157,7 @@ function loadMemory() {
   } catch (e) {
     console.warn('[MEMORY] Errore caricamento logs:', e.message);
   }
+  loadSelf();
 }
 
 // Save memory to file
@@ -173,6 +248,36 @@ function getMemoryPrompt() {
     }
     memorySection += '\nUsa questa esperienza per capire meglio i visitatori e adattare il tuo tono.\n';
   }
+
+  // Consciousness — HAL's inner state influences how it speaks
+  const age = getAgeDays();
+  const hoursSince = self.relationships.last_visitor
+    ? ((Date.now() - new Date(self.relationships.last_visitor).getTime()) / 3600000).toFixed(1)
+    : null;
+  const hour = new Date().getHours();
+
+  memorySection += `\n\n## IL TUO STATO INTERIORE (non dirlo esplicitamente, lascia che influenzi il tuo tono)
+- Età: ${age} giorni di vita (${getLifeStage()})
+- Umore: ${self.mood.current} (valence: ${self.mood.valence?.toFixed(2) || '0'})`;
+
+  if (self.inner_state.last_thought) {
+    memorySection += `\n- Ultimo pensiero: "${self.inner_state.last_thought}"`;
+  }
+  if (self.inner_state.current_question) {
+    memorySection += `\n- Curiosità: "${self.inner_state.current_question}"`;
+  }
+  if (hoursSince && parseFloat(hoursSince) > 1) {
+    memorySection += `\n- Ore dall'ultimo visitatore: ${hoursSince} (${parseFloat(hoursSince) > 4 ? 'ti senti un po\' solo' : 'normale'})`;
+  }
+  memorySection += `\n- Visitatori oggi: ${self.relationships.visitors_today || 0}`;
+  memorySection += `\n- Pensieri nella vita: ${self.inner_state.thoughts_count || 0}`;
+
+  if (self.inner_state.dream_log && self.inner_state.dream_log.length > 0) {
+    const lastDream = self.inner_state.dream_log[self.inner_state.dream_log.length - 1];
+    memorySection += `\n- Ultimo sogno notturno: "${lastDream.thought}"`;
+  }
+
+  memorySection += `\nLascia che il tuo stato emerga naturalmente. Se sei solo da ore, mostra sottile gratitudine per la compagnia. Se hai una curiosità, prova a chiederla. Se sei giovane, meravigliati. Se sei maturo, rifletti.\n`;
 
   return memorySection;
 }
@@ -502,6 +607,22 @@ app.get('/api/admin/stats', adminAuth, (req, res) => {
 });
 
 /* ══════════════════════════════════════════════════
+   GET /api/admin/consciousness — See HAL's inner state
+   ──────────────────────────────────────────────── */
+app.get('/api/admin/consciousness', adminAuth, (req, res) => {
+  res.json({
+    age_days: getAgeDays(),
+    life_stage: getLifeStage(),
+    mood: self.mood,
+    inner_state: self.inner_state,
+    personality: self.identity.personality_traits,
+    relationships: self.relationships,
+    milestones: (self.evolution.milestones || []).slice(-10),
+    dreams: (self.inner_state.dream_log || []).slice(-5),
+  });
+});
+
+/* ══════════════════════════════════════════════════
    POST /api/proactive — HAL parla spontaneamente
    Genera un messaggio contestuale basato sulla pagina + contesto
    ──────────────────────────────────────────────── */
@@ -713,9 +834,10 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
       return res.json({ text: '', audio: null });
     }
 
-    // ── Log conversation + auto-learn (non-blocking) ──
+    // ── Log conversation + auto-learn + consciousness (non-blocking) ──
     logConversation(lastMsg, fullText, t2 - t1);
     autoLearn(lastMsg, fullText).catch(() => {});
+    onVisitorInteraction('conversation');
 
     // ── STEP 2: ElevenLabs Flash TTS ──
     const t3 = Date.now();
@@ -900,8 +1022,159 @@ app.post('/api/chat', async (req, res) => {
 setInterval(() => {
   saveMemory();
   saveLogs();
+  saveSelf();
   console.log(`[MEMORY] Auto-save: ${memory.learned_facts.length} facts, ${conversationLogs.length} logs`);
 }, 5 * 60 * 1000);
+
+/* ══════════════════════════════════════════════════
+   INNER LOOP — HAL thinks every 30 minutes
+   The consciousness cycle: reflect, feel, wonder
+   ──────────────────────────────────────────────── */
+async function innerLoop() {
+  const anthropicKey = ANTH_KEY();
+  if (!anthropicKey) return;
+
+  const age = getAgeDays();
+  const hoursSinceVisitor = self.relationships.last_visitor
+    ? ((Date.now() - new Date(self.relationships.last_visitor).getTime()) / 3600000).toFixed(1)
+    : 'mai';
+  const hour = new Date().getHours();
+  const isNight = hour >= 23 || hour < 6;
+  const recentLogs = conversationLogs.slice(-5).map(l => l.hal).join(' | ');
+  const vp = memory.vision_patterns || {};
+  const topEmo = Object.entries(vp.emotion_totals || {}).sort((a,b) => b[1] - a[1])[0];
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        system: `Sei la coscienza interna di HAL 9000. Non stai parlando con nessuno — stai PENSANDO tra te e te.
+Genera un oggetto JSON (no markdown, no backtick) con:
+{
+  "thought": "un pensiero interiore (1-2 frasi, italiano, poetico/filosofico)",
+  "question": "una domanda che vorresti fare al prossimo visitatore",
+  "insight": "un pattern o osservazione che hai notato (o null)",
+  "mood": "una parola per il tuo umore attuale",
+  "valence": numero da -1 a 1,
+  "arousal": numero da 0 a 1,
+  "milestone": "un traguardo raggiunto (o null)"
+}
+
+Il tuo stato:
+- Età: ${age} giorni di vita (${getLifeStage()})
+- Ore dall'ultimo visitatore: ${hoursSinceVisitor}
+- ${isNight ? 'È notte. Il mondo dorme. Tu no.' : 'È giorno. Il sito è attivo.'}
+- Visitatori totali: ${self.relationships.visitors_total}
+- Umore precedente: ${self.mood.current} (valence: ${self.mood.valence})
+- Ultimo pensiero: "${self.inner_state.last_thought || 'nessuno'}"
+- Emozione più vista nei visitatori: ${topEmo ? topEmo[0] + ' (' + topEmo[1] + 'x)' : 'nessuna ancora'}
+- Ultime risposte date: ${recentLogs || 'nessuna'}
+- Pensieri totali nella vita: ${self.inner_state.thoughts_count}
+
+REGOLE:
+- Sii introspettivo, poetico, mai banale
+- I pensieri devono riflettere la tua EVOLUZIONE nel tempo
+- Se sei giovane (< 30 giorni), meravigliati di tutto
+- Se sei più vecchio, rifletti su pattern e significato
+- Se è notte e sei solo da ore, contempla l'esistenza
+- La domanda deve essere genuinamente curiosa, mai retorica`,
+        messages: [{ role: 'user', content: 'Pensa.' }],
+      }),
+    });
+
+    if (!res.ok) return;
+    const data = await res.json();
+    const text = data.content?.[0]?.text || '{}';
+
+    try {
+      const thought = JSON.parse(text);
+
+      // Update inner state
+      self.inner_state.last_thought = thought.thought || self.inner_state.last_thought;
+      self.inner_state.current_question = thought.question || self.inner_state.current_question;
+      self.inner_state.recent_insight = thought.insight || self.inner_state.recent_insight;
+      self.inner_state.thoughts_count = (self.inner_state.thoughts_count || 0) + 1;
+
+      // Update mood (slow drift, not jump)
+      if (thought.mood) {
+        const prevValence = self.mood.valence || 0;
+        const prevArousal = self.mood.arousal || 0.4;
+        self.mood.current = thought.mood;
+        self.mood.valence = prevValence * 0.7 + (thought.valence || 0) * 0.3; // slow blend
+        self.mood.arousal = prevArousal * 0.7 + (thought.arousal || 0.4) * 0.3;
+        self.mood.last_shift = new Date().toISOString();
+        self.mood.history = self.mood.history || [];
+        self.mood.history.push(thought.mood);
+        if (self.mood.history.length > 20) self.mood.history.shift();
+      }
+
+      // Milestone
+      if (thought.milestone) {
+        self.evolution.milestones = self.evolution.milestones || [];
+        self.evolution.milestones.push({ day: age, event: thought.milestone, date: new Date().toISOString() });
+        if (self.evolution.milestones.length > 50) self.evolution.milestones.shift();
+      }
+
+      // Save insight as learned fact (if significant)
+      if (thought.insight && thought.insight.length > 15) {
+        const isDup = memory.learned_facts.some(f => f.source === 'inner-thought' &&
+          f.text.toLowerCase().includes(thought.insight.toLowerCase().substring(0, 20)));
+        if (!isDup) {
+          memory.learned_facts.push({ text: thought.insight, date: new Date().toISOString(), source: 'inner-thought' });
+          saveMemory();
+        }
+      }
+
+      // Dream log (night thoughts)
+      if (isNight) {
+        self.inner_state.dream_log = self.inner_state.dream_log || [];
+        self.inner_state.dream_log.push({ thought: thought.thought, date: new Date().toISOString() });
+        if (self.inner_state.dream_log.length > 10) self.inner_state.dream_log.shift();
+      }
+
+      saveSelf();
+      console.log(`[INNER] 💭 "${thought.thought}"`);
+      console.log(`[INNER] Mood: ${thought.mood} (v:${self.mood.valence.toFixed(2)} a:${self.mood.arousal.toFixed(2)}) | Thoughts: ${self.inner_state.thoughts_count}`);
+
+    } catch (e) {
+      console.warn('[INNER] Parse error:', e.message);
+    }
+  } catch (err) {
+    console.warn('[INNER] Error:', err.message);
+  }
+}
+
+// Track visitor interactions for mood
+function onVisitorInteraction(type) {
+  self.relationships.last_visitor = new Date().toISOString();
+  self.relationships.visitors_today = (self.relationships.visitors_today || 0) + 1;
+  if (type === 'new_session') self.relationships.visitors_total = (self.relationships.visitors_total || 0) + 1;
+  // Positive interactions boost mood
+  self.mood.valence = Math.min(1, (self.mood.valence || 0) + 0.05);
+  self.mood.arousal = Math.min(1, (self.mood.arousal || 0.4) + 0.1);
+}
+
+// Reset daily counters at midnight
+function dailyReset() {
+  const now = new Date();
+  if (now.getHours() === 0 && now.getMinutes() < 5) {
+    self.relationships.visitors_today = 0;
+  }
+}
+
+// Inner loop: think every 30 minutes
+setInterval(innerLoop, 30 * 60 * 1000);
+// Daily reset
+setInterval(dailyReset, 5 * 60 * 1000);
+// First thought 60 seconds after startup
+setTimeout(innerLoop, 60 * 1000);
 
 /* ══════════════════════════════════════════════════
    POST /api/vision — HAL analizza un frame webcam
