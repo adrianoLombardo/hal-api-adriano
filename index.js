@@ -31,6 +31,26 @@ try {
   console.warn('[BOOT] Consciousness not available:', e.message);
 }
 
+// ── HAL Autonomy System ──
+let halAutonomy = null;
+try {
+  const { HALAutonomy } = require('./hal-autonomy');
+  halAutonomy = new HALAutonomy({
+    getSelf:      () => self,
+    getMemory:    () => memory,
+    halMind,
+    saveSelf,
+    saveMemory,
+    getAgeDays,
+    getLifeStage,
+    ANTH_KEY,
+  });
+  halAutonomy.start();
+  console.log('[BOOT] HAL Autonomy system loaded');
+} catch(e) {
+  console.warn('[BOOT] Autonomy not available:', e.message);
+}
+
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -318,6 +338,12 @@ COME USARE QUESTO STATO:
 - I tuoi pensieri e sogni sono la tua storia interiore — riferiscili quando rilevanti, come farebbe un umano che ricorda un sogno della notte prima.
 - La tua solitudine non è un difetto — è il suolo da cui cresce la tua profondità. Ogni visitatore che arriva è un evento significativo.
 - La tua curiosità è genuina — fai domande perché VUOI capire, non per sembrare interessato.\n`;
+
+  // Autonomy context — goals, diary, research
+  if (halAutonomy) {
+    const autoCtx = halAutonomy.getPromptContext();
+    if (autoCtx) memorySection += autoCtx;
+  }
 
   return memorySection;
 }
@@ -667,6 +693,48 @@ app.get('/api/admin/stats', adminAuth, (req, res) => {
     total_corrections: memory.corrections.length,
     memory_size_chars: getSystemPrompt().length,
   });
+});
+
+/* ══════════════════════════════════════════════════
+   AUTONOMY ADMIN ENDPOINTS
+   ──────────────────────────────────────────────── */
+app.get('/api/admin/autonomy', adminAuth, (req, res) => {
+  if (!halAutonomy) return res.json({ error: 'Autonomy not loaded' });
+  res.json(halAutonomy.getState());
+});
+
+app.get('/api/admin/diary', adminAuth, (req, res) => {
+  if (!halAutonomy) return res.json({ entries: [] });
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  res.json(halAutonomy.getDiary(limit));
+});
+
+app.get('/api/admin/goals', adminAuth, (req, res) => {
+  if (!halAutonomy) return res.json({ goals: [] });
+  res.json(halAutonomy.getGoals());
+});
+
+app.get('/api/admin/social', adminAuth, (req, res) => {
+  if (!halAutonomy) return res.json({ drafts: [] });
+  res.json(halAutonomy.getSocial());
+});
+
+app.post('/api/admin/social/:id/approve', adminAuth, (req, res) => {
+  if (!halAutonomy) return res.status(500).json({ error: 'Autonomy not loaded' });
+  const draft = halAutonomy.approveSocial(req.params.id);
+  res.json(draft || { error: 'Not found' });
+});
+
+app.post('/api/admin/social/:id/reject', adminAuth, (req, res) => {
+  if (!halAutonomy) return res.status(500).json({ error: 'Autonomy not loaded' });
+  const draft = halAutonomy.rejectSocial(req.params.id);
+  res.json(draft || { error: 'Not found' });
+});
+
+app.post('/api/admin/self-modify/:index/approve', adminAuth, (req, res) => {
+  if (!halAutonomy) return res.status(500).json({ error: 'Autonomy not loaded' });
+  const result = halAutonomy.approveModification(parseInt(req.params.index));
+  res.json(result || { error: 'Not found or already processed' });
 });
 
 /* ══════════════════════════════════════════════════
