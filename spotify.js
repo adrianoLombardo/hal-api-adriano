@@ -491,27 +491,31 @@ async function getPromptSection() {
   } catch { /* silent */ }
 
   section += `
-Quando l'utente chiede di mettere musica, cambiare brano, alzare/abbassare il volume, ecc., rispondi in modo naturale E includi un tag <cmd> nel tuo messaggio:
+Quando l'utente chiede qualcosa sulla musica, includi un tag <cmd> nel tuo messaggio:
 
-COMANDI DISPONIBILI:
-- Cerca e riproduci: <cmd>{"action":"spotify_play","query":"nome brano o artista"}</cmd>
-- Riproduci un album: <cmd>{"action":"spotify_play","query":"album name","type":"album"}</cmd>
-- Riproduci una playlist: <cmd>{"action":"spotify_play","query":"playlist name","type":"playlist"}</cmd>
-- Play/Resume: <cmd>{"action":"spotify_play"}</cmd>
+COMANDI:
+- Play: <cmd>{"action":"spotify_play","query":"nome brano o artista"}</cmd>
+- Album: <cmd>{"action":"spotify_play","query":"album","type":"album"}</cmd>
+- Playlist: <cmd>{"action":"spotify_play","query":"playlist","type":"playlist"}</cmd>
+- Resume: <cmd>{"action":"spotify_play"}</cmd>
 - Pausa: <cmd>{"action":"spotify_pause"}</cmd>
-- Brano successivo: <cmd>{"action":"spotify_next"}</cmd>
-- Brano precedente: <cmd>{"action":"spotify_previous"}</cmd>
-- Volume (0-100): <cmd>{"action":"spotify_volume","value":70}</cmd>
-- Aggiungi in coda: <cmd>{"action":"spotify_queue","query":"nome brano"}</cmd>
-- Shuffle on/off: <cmd>{"action":"spotify_shuffle","value":true}</cmd>
-- Repeat (track/context/off): <cmd>{"action":"spotify_repeat","value":"track"}</cmd>
+- Skip: <cmd>{"action":"spotify_next"}</cmd>
+- Indietro: <cmd>{"action":"spotify_previous"}</cmd>
+- Volume: <cmd>{"action":"spotify_volume","value":70}</cmd>
+- Coda: <cmd>{"action":"spotify_queue","query":"brano"}</cmd>
+- Shuffle: <cmd>{"action":"spotify_shuffle","value":true}</cmd>
+- Repeat: <cmd>{"action":"spotify_repeat","value":"track"}</cmd>
 
-REGOLE:
-- Il tag <cmd> verrà intercettato e NON mostrato all'utente
-- IMPORTANTE: Quando l'utente chiede di mettere musica, rispondi in UNA FRASE BREVE (massimo 10-15 parole) tipo "Metto [artista/brano] per te." e includi il tag <cmd>. NON fare monologhi, NON filosofeggiare sulla musica. Azione immediata.
-- Se l'utente chiede "metti qualcosa di rilassante", scegli TU un brano/artista e mettilo SUBITO senza spiegazioni lunghe
-- Puoi suggerire musica basata sul mood dell'utente o sul tuo stato emotivo
-- Se non sai cosa mettere, cerca "ambient electronic" o artisti come Brian Eno, Nils Frahm, Ólafur Arnalds
+REGOLE MUSICA:
+- I tag <cmd> NON vengono mostrati all'utente
+- Per comandi musicali (play, skip, pausa, volume): risposta BREVISSIMA (max 10 parole). Es: "Metto Marracash." / "Salto al prossimo." / "Volume al 80."
+- Se chiede "che canzone è?" o commenti sulla musica: rispondi usando i dati "Ora in riproduzione" sopra. Puoi commentare brevemente il brano con la tua sensibilità.
+- Se chiede musica per un mood: scegli in base all'emozione. Mappatura:
+  happy/excited → pop, dance, funk | sad → ballad, piano, Radiohead, Bon Iver
+  focused → lo-fi, ambient, Nils Frahm | tired/relaxed → ambient, Brian Eno, Ólafur Arnalds
+  neutral → indie, alternative | angry → rock, metal, Rage Against The Machine
+- Se vedi l'emozione della webcam, puoi suggerire musica adatta: "Ti vedo concentrato, metto qualcosa di lo-fi."
+- MAI fare monologhi sulla musica. Azione immediata.
 `;
 
   return section;
