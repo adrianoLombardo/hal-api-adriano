@@ -184,7 +184,27 @@ async function play(opts = {}) {
     // Album, playlist, artist
     body.context_uri = opts.context_uri;
   }
-  const params = opts.device_id ? `?device_id=${opts.device_id}` : '';
+
+  // If no device specified, find an active one or activate HAL 9000 device
+  let deviceParam = opts.device_id || '';
+  if (!deviceParam) {
+    try {
+      const devices = await spotifyFetch('/me/player/devices');
+      const list = devices.devices || [];
+      const active = list.find(d => d.is_active);
+      if (!active) {
+        // Prefer HAL 9000 device, fallback to first available
+        const hal = list.find(d => d.name?.includes('HAL 9000'));
+        const target = hal || list[0];
+        if (target) {
+          deviceParam = target.id;
+          console.log(`[SPOTIFY] No active device — activating: ${target.name}`);
+        }
+      }
+    } catch (e) { /* silent */ }
+  }
+
+  const params = deviceParam ? `?device_id=${deviceParam}` : '';
   return spotifyFetch(`/me/player/play${params}`, { method: 'PUT', body: Object.keys(body).length ? body : undefined });
 }
 
