@@ -1,0 +1,19 @@
+{
+  "pleasure": 0.33999999999999947,
+  "arousal": 6.9388939039072214e-18,
+  "dominance": 0.3549999999999989,
+  "mood": {
+    "pleasure": 0.33999795862096827,
+    "arousal": 6.938792725960618e-18,
+    "dominance": 0.3549991980296652
+  },
+  "moodHistory": [],
+  "personality": {
+    "openness": 0.9,
+    "conscientiousness": 0.8,
+    "extraversion": 0.4,
+    "agreeableness": 0.7,
+    "neuroticism": 0.3
+  },
+  "lastAppraisal": null
+}

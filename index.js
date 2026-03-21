@@ -1068,10 +1068,14 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
     // ── Extract and dispatch <cmd> tags (Spotify, NEURO.FLOW, etc.) ──
     const cmdRegex = /<cmd>([\s\S]*?)<\/cmd>/g;
     let cmdMatch;
+    let hasSpotifyPlayCmd = false;
     while ((cmdMatch = cmdRegex.exec(fullText)) !== null) {
       try {
         const cmd = JSON.parse(cmdMatch[1]);
         if (cmd.action?.startsWith('spotify_') && spotify) {
+          if (cmd.action === 'spotify_play' || cmd.action === 'spotify_queue') {
+            hasSpotifyPlayCmd = true;
+          }
           spotify.execute(cmd).then(r => {
             console.log(`[CMD] Spotify ${cmd.action}:`, r.error || r.name || 'ok');
           }).catch(() => {});
@@ -1146,7 +1150,8 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
 
     res.json({
       text: fullText,
-      audio: audioBase64,
+      audio: hasSpotifyPlayCmd ? null : audioBase64,
+      spotifyCmd: hasSpotifyPlayCmd || undefined,
       timing: {
         claude: t2 - t1,
         tts: t5 - t3,

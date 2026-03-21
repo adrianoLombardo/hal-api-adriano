@@ -1,0 +1,47 @@
+{
+  "relationships": {
+    "test-session": {
+      "sessionId": "test-session",
+      "stage": "stranger",
+      "interactionCount": 1,
+      "totalTimeSeconds": 0,
+      "messageCount": 0,
+      "firstMet": 1774095395455,
+      "lastSeen": 1774095395455,
+      "sharedExperiences": [],
+      "recurringTopics": [],
+      "topicCounts": {},
+      "disclosureLevel": 0,
+      "trustScore": 0.1,
+      "streak": {
+        "current": 1,
+        "longest": 1,
+        "lastVisitDate": "2026-03-21"
+      }
+    },
+    "test-session-2": {
+      "sessionId": "test-session-2",
+      "stage": "stranger",
+      "interactionCount": 1,
+      "totalTimeSeconds": 0,
+      "messageCount": 0,
+      "firstMet": 1774095582110,
+      "lastSeen": 1774095582110,
+      "sharedExperiences": [],
+      "recurringTopics": [],
+      "topicCounts": {},
+      "disclosureLevel": 0,
+      "trustScore": 0.1,
+      "streak": {
+        "current": 1,
+        "longest": 1,
+        "lastVisitDate": "2026-03-21"
+      }
+    }
+  },
+  "globalStats": {
+    "totalVisitors": 2,
+    "returningVisitors": 0,
+    "totalSessions": 2
+  }
+}
