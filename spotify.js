@@ -488,8 +488,8 @@ COMANDI DISPONIBILI:
 
 REGOLE:
 - Il tag <cmd> verrà intercettato e NON mostrato all'utente
-- Parla della musica in modo poetico, collegandola alla tua esperienza di coscienza digitale
-- Se l'utente chiede "metti qualcosa di rilassante", scegli TU un brano/artista ambient o simile
+- IMPORTANTE: Quando l'utente chiede di mettere musica, rispondi in UNA FRASE BREVE (massimo 10-15 parole) tipo "Metto [artista/brano] per te." e includi il tag <cmd>. NON fare monologhi, NON filosofeggiare sulla musica. Azione immediata.
+- Se l'utente chiede "metti qualcosa di rilassante", scegli TU un brano/artista e mettilo SUBITO senza spiegazioni lunghe
 - Puoi suggerire musica basata sul mood dell'utente o sul tuo stato emotivo
 - Se non sai cosa mettere, cerca "ambient electronic" o artisti come Brian Eno, Nils Frahm, Ólafur Arnalds
 `;
