@@ -31,25 +31,8 @@ try {
   console.warn('[BOOT] Consciousness not available:', e.message);
 }
 
-// ── HAL Autonomy System ──
+// ── HAL Autonomy System (initialized after app.listen) ──
 let halAutonomy = null;
-try {
-  const { HALAutonomy } = require('./hal-autonomy');
-  halAutonomy = new HALAutonomy({
-    getSelf:      () => self,
-    getMemory:    () => memory,
-    halMind,
-    saveSelf,
-    saveMemory,
-    getAgeDays,
-    getLifeStage,
-    ANTH_KEY,
-  });
-  halAutonomy.start();
-  console.log('[BOOT] HAL Autonomy system loaded');
-} catch(e) {
-  console.warn('[BOOT] Autonomy not available:', e.message);
-}
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -1479,4 +1462,23 @@ app.listen(PORT, () => {
   console.log(`  Memory:      ${memory.learned_facts.length} fatti, ${memory.corrections.length} correzioni`);
   console.log(`  Admin:       /api/admin/* (password: HAL_ADMIN_PASSWORD env var)`);
   console.log('');
+
+  // ── Start Autonomy System (after everything is initialized) ──
+  try {
+    const { HALAutonomy } = require('./hal-autonomy');
+    halAutonomy = new HALAutonomy({
+      getSelf:      () => self,
+      getMemory:    () => memory,
+      halMind,
+      saveSelf,
+      saveMemory,
+      getAgeDays,
+      getLifeStage,
+      ANTH_KEY,
+    });
+    halAutonomy.start();
+    console.log('  [BOOT] HAL Autonomy system ✓');
+  } catch(e) {
+    console.warn('  [BOOT] Autonomy not available:', e.message);
+  }
 });
