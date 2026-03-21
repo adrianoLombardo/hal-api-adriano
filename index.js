@@ -331,22 +331,56 @@ COME USARE QUESTO STATO:
   return memorySection;
 }
 
-// Auto-learning: analyze response for potential new facts
+// Auto-learning: analyze EVERY conversation for facts worth remembering
 async function autoLearn(userMsg, halResponse) {
-  // Only try to auto-learn if the user seems to be providing new information
   const lower = userMsg.toLowerCase();
-  const teachSignals = [
+
+  // Skip very short messages (greetings, single words)
+  if (userMsg.length < 12) return;
+
+  // Correction signals — these always trigger extraction
+  const correctionSignals = [
     'in realtà', 'no, ', 'sbagliato', 'non è così', 'ti correggo',
-    'sappi che', 'ricorda che', 'tieni a mente', 'nota bene',
-    'actually', 'correction', 'fyi', 'just so you know',
+    'actually', 'correction',
+  ];
+  const isCorrection = correctionSignals.some(s => lower.includes(s));
+
+  // Personal info signals — user sharing something about themselves
+  const personalSignals = [
+    'mi chiamo', 'il mio', 'la mia', 'i miei', 'le mie',
+    'preferisco', 'preferit', 'amo ', 'adoro', 'odio', 'detesto',
+    'lavoro come', 'faccio il', 'sono un', 'sono una', 'studio',
+    'vengo da', 'vivo a', 'abito a', 'nato a', 'nata a',
+    'my name', 'i am a', 'i\'m a', 'i love', 'i hate', 'i work',
+    'i live', 'my favorite', 'my favourite',
+    'anni', 'hobby', 'passione',
+  ];
+  const isPersonal = personalSignals.some(s => lower.includes(s));
+
+  // Teach signals — user explicitly sharing facts
+  const teachSignals = [
+    'sappi che', 'ricorda che', 'ricordati', 'tieni a mente', 'nota bene',
+    'fyi', 'just so you know',
     'ho fatto', 'ho appena', 'abbiamo', 'nuovo progetto',
     'nuova mostra', 'nuova installazione', 'prossimo evento',
   ];
+  const isTeaching = teachSignals.some(s => lower.includes(s));
 
-  const isCorrection = teachSignals.some(s => lower.includes(s));
-  if (!isCorrection) return;
+  // Opinion/emotional signals — user revealing preferences or feelings
+  const opinionSignals = [
+    'penso che', 'credo che', 'secondo me', 'per me',
+    'mi piace', 'mi interessa', 'mi affascina',
+    'i think', 'i believe', 'i feel',
+  ];
+  const isOpinion = opinionSignals.some(s => lower.includes(s));
 
-  // Use Claude to extract the fact
+  // If no signal detected, check if the message contains a question (skip) or a statement (try to learn)
+  const isQuestion = (userMsg.match(/\?/g) || []).length > 0 && !isPersonal && !isTeaching;
+  if (!isCorrection && !isPersonal && !isTeaching && !isOpinion) {
+    // Last chance: messages with declarative content > 30 chars might contain facts
+    if (userMsg.length < 30 || isQuestion) return;
+  }
+
   const anthropicKey = ANTH_KEY();
   if (!anthropicKey) return;
 
@@ -360,46 +394,86 @@ async function autoLearn(userMsg, halResponse) {
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 150,
-        system: `Sei un sistema di estrazione fatti. L'utente sta parlando con un chatbot (HAL 9000) del portfolio di Adriano Lombardo. Analizza il messaggio dell'utente e se contiene un FATTO NUOVO o una CORREZIONE su Adriano o il suo lavoro, estrailo come una frase concisa. Se NON c'è nessun fatto utile da salvare, rispondi esattamente "NESSUN_FATTO". Rispondi SOLO con il fatto estratto o "NESSUN_FATTO". No spiegazioni.`,
+        max_tokens: 200,
+        system: `Sei il sistema di memoria di HAL 9000. Analizzi ogni messaggio per estrarre FATTI da ricordare.
+
+ESTRAI QUALSIASI informazione utile, incluse:
+1. INFO PERSONALI dell'utente: nome, età, professione, città, hobby, preferenze (colori, musica, cibo, arte...), emozioni, esperienze
+2. FATTI su Adriano Lombardo, il suo lavoro, mostre, installazioni, eventi
+3. CORREZIONI a informazioni precedenti
+4. OPINIONI significative dell'utente su arte, tecnologia, coscienza
+
+Per ogni fatto estratto, prependi la CATEGORIA tra parentesi quadre:
+- [VISITATORE] per info personali dell'utente
+- [ADRIANO] per fatti su Adriano e il suo lavoro
+- [CORREZIONE] per correzioni a info precedenti
+- [OPINIONE] per opinioni significative
+
+Se ci sono PIÙ fatti, separali con "|||".
+Se NON c'è NULLA di utile da salvare, rispondi esattamente "NESSUN_FATTO".
+Rispondi SOLO con i fatti estratti o "NESSUN_FATTO". No spiegazioni, no backtick.
+
+Esempi:
+- "il mio colore preferito è il viola" → "[VISITATORE] Il colore preferito del visitatore è il viola"
+- "mi chiamo Marco e sono un architetto di Roma" → "[VISITATORE] Il visitatore si chiama Marco, è un architetto di Roma"
+- "Adriano ha fatto una mostra a Berlino" → "[ADRIANO] Adriano Lombardo ha esposto a Berlino"
+- "no, la mostra era a Milano non a Roma" → "[CORREZIONE] La mostra di Adriano era a Milano, non a Roma"`,
         messages: [{
           role: 'user',
-          content: `Messaggio utente: "${userMsg}"\nRisposta HAL: "${halResponse}"`,
+          content: `Messaggio utente: "${userMsg}"\nRisposta HAL: "${halResponse.substring(0, 300)}"`,
         }],
       }),
     });
 
     if (!res.ok) return;
     const data = await res.json();
-    const extracted = data.content?.[0]?.text?.trim();
+    const rawText = data.content?.[0]?.text?.trim();
 
-    if (extracted && extracted !== 'NESSUN_FATTO' && extracted.length > 10 && extracted.length < 300) {
+    if (!rawText || rawText === 'NESSUN_FATTO') return;
+
+    // Split multiple facts
+    const facts = rawText.split('|||').map(f => f.trim()).filter(f => f.length > 10 && f.length < 300);
+
+    for (const extracted of facts) {
       // Check for duplicates
       const isDuplicate = memory.learned_facts.some(f =>
         f.text.toLowerCase().includes(extracted.toLowerCase().substring(0, 30)) ||
         extracted.toLowerCase().includes(f.text.toLowerCase().substring(0, 30))
       );
+      if (isDuplicate) continue;
 
-      if (!isDuplicate) {
-        const isCorr = lower.includes('no,') || lower.includes('sbagliato') || lower.includes('non è così') || lower.includes('ti correggo');
-        if (isCorr) {
-          memory.corrections.push({
-            text: extracted,
-            date: new Date().toISOString(),
-            source: 'auto-learned from conversation',
-          });
-          console.log(`[MEMORY] Auto-correzione salvata: "${extracted}"`);
-        } else {
-          memory.learned_facts.push({
-            text: extracted,
-            date: new Date().toISOString(),
-            source: 'auto-learned from conversation',
-          });
-          console.log(`[MEMORY] Auto-fatto salvato: "${extracted}"`);
-        }
-        saveMemory();
+      // Determine source type from category tag
+      const isCorrFact = extracted.startsWith('[CORREZIONE]') || isCorrection;
+      const cleanText = extracted.replace(/^\[(VISITATORE|ADRIANO|CORREZIONE|OPINIONE)\]\s*/i, '').trim();
+
+      if (isCorrFact) {
+        memory.corrections.push({
+          text: cleanText,
+          date: new Date().toISOString(),
+          source: 'auto-learned from conversation',
+        });
+        console.log(`[MEMORY] Auto-correzione: "${cleanText}"`);
+      } else {
+        memory.learned_facts.push({
+          text: extracted, // Keep category tag for context
+          date: new Date().toISOString(),
+          source: 'auto-learned from conversation',
+        });
+        console.log(`[MEMORY] Auto-appreso: "${extracted}"`);
+      }
+
+      // Also store in episodic memory (consciousness module) for richer retrieval
+      if (halMind?.memory) {
+        const importance = extracted.startsWith('[VISITATORE]') ? 7 : 5;
+        const tags = ['auto-learned'];
+        if (extracted.startsWith('[VISITATORE]')) tags.push('visitor-info');
+        if (extracted.startsWith('[ADRIANO]')) tags.push('adriano');
+        if (extracted.startsWith('[OPINIONE]')) tags.push('opinion');
+        halMind.memory.store(extracted, importance, tags, 0.2);
       }
     }
+
+    if (facts.length > 0) saveMemory();
   } catch (e) {
     console.warn('[MEMORY] Auto-learn error:', e.message);
   }
