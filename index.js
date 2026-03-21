@@ -31,6 +31,15 @@ try {
   console.warn('[BOOT] Consciousness not available:', e.message);
 }
 
+// ── Spotify Controller ──
+let spotify = null;
+try {
+  spotify = require('./spotify');
+  console.log('[BOOT] Spotify module loaded');
+} catch(e) {
+  console.warn('[BOOT] Spotify not available:', e.message);
+}
+
 // ── HAL Autonomy System (initialized after app.listen) ──
 let halAutonomy = null;
 
@@ -48,6 +57,9 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, '..')));
+
+// ── Spotify routes ──
+if (spotify) app.use('/api/spotify', spotify.router);
 
 /* ══════════════════════════════════════════════════
    CONFIG
@@ -329,6 +341,19 @@ COME USARE QUESTO STATO:
   }
 
   return memorySection;
+}
+
+// Spotify prompt section (cached, refreshed every 30s)
+let _spotifyPromptCache = '';
+let _spotifyPromptTime  = 0;
+async function getSpotifyPrompt() {
+  if (!spotify?.isConfigured()) return '';
+  if (Date.now() - _spotifyPromptTime < 30000) return _spotifyPromptCache;
+  try {
+    _spotifyPromptCache = await spotify.getPromptSection();
+    _spotifyPromptTime = Date.now();
+  } catch { /* silent */ }
+  return _spotifyPromptCache;
 }
 
 // Auto-learning: analyze EVERY conversation for facts worth remembering
@@ -967,6 +992,10 @@ app.post('/api/speak', async (req, res) => {
     const t1 = Date.now();
     let systemPrompt = getSystemPrompt() + consciousnessPrompt;
 
+    // Add Spotify context
+    const spotifyPrompt = await getSpotifyPrompt();
+    if (spotifyPrompt) systemPrompt += spotifyPrompt;
+
     // Add vision context
     if (vision && vision.emotion) {
       systemPrompt += `\n\nCOSA STAI VEDENDO ORA (webcam):
@@ -1035,6 +1064,25 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
     if (!fullText.trim()) {
       return res.json({ text: '', audio: null });
     }
+
+    // ── Extract and dispatch <cmd> tags (Spotify, NEURO.FLOW, etc.) ──
+    const cmdRegex = /<cmd>([\s\S]*?)<\/cmd>/g;
+    let cmdMatch;
+    while ((cmdMatch = cmdRegex.exec(fullText)) !== null) {
+      try {
+        const cmd = JSON.parse(cmdMatch[1]);
+        if (cmd.action?.startsWith('spotify_') && spotify) {
+          spotify.execute(cmd).then(r => {
+            console.log(`[CMD] Spotify ${cmd.action}:`, r.error || r.name || 'ok');
+          }).catch(() => {});
+        }
+        // Future: NEURO.FLOW commands here
+      } catch (e) {
+        console.warn('[CMD] Parse error:', e.message);
+      }
+    }
+    // Remove <cmd> tags from visible text
+    fullText = fullText.replace(/<cmd>[\s\S]*?<\/cmd>/g, '').trim();
 
     // ── Log conversation + auto-learn + consciousness (non-blocking) ──
     logConversation(lastMsg, fullText, t2 - t1);
@@ -1207,7 +1255,20 @@ app.post('/api/chat', async (req, res) => {
     if (!response.ok) return res.status(response.status).json({ error: 'AI failed' });
 
     const data = await response.json();
-    const halText = data.content?.[0]?.text || 'Anomalia nei circuiti.';
+    let halText = data.content?.[0]?.text || 'Anomalia nei circuiti.';
+
+    // ── Extract and dispatch <cmd> tags ──
+    const chatCmdRegex = /<cmd>([\s\S]*?)<\/cmd>/g;
+    let chatCmdMatch;
+    while ((chatCmdMatch = chatCmdRegex.exec(halText)) !== null) {
+      try {
+        const cmd = JSON.parse(chatCmdMatch[1]);
+        if (cmd.action?.startsWith('spotify_') && spotify) {
+          spotify.execute(cmd).catch(() => {});
+        }
+      } catch {}
+    }
+    halText = halText.replace(/<cmd>[\s\S]*?<\/cmd>/g, '').trim();
 
     // Log + auto-learn
     logConversation(lastMsg, halText);
