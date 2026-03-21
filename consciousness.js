@@ -197,31 +197,24 @@ class HALConsciousness {
      ─────────────────────────────────────────────────────────── */
   async afterResponse(sessionId, userMessage, halResponse, sensorData = {}) {
     // 1. Store new episodic memory
-    this._safeAsync(() =>
-      this.memory.store({
-        type: 'episodic',
-        sessionId,
-        userMessage,
-        halResponse,
-        timestamp: Date.now(),
-        sensorData,
-      })
-    );
-
-    // 2. Appraise the turn and update emotion state
     this._safeAsync(() => {
-      const appraisal = appraiseTurn(userMessage, halResponse, sensorData);
-      this.emotion.update(appraisal);
+      const summary = `[${sessionId}] Utente: "${(userMessage || '').substring(0, 100)}" → HAL: "${(halResponse || '').substring(0, 100)}"`;
+      this.memory.store(summary, 5, ['conversation', 'episodic'], 0);
+    });
+
+    // 2. Appraise the turn and update emotion state (appraiseTurn handles emotion internally)
+    this._safeAsync(() => {
+      appraiseTurn(sessionId, userMessage, halResponse, sensorData?.webcam, sensorData?.eeg);
     });
 
     // 3. Update user model with new data
     this._safeAsync(() =>
-      this.userModel.update(sessionId, {
+      this.userModel.updateFromMessage(
+        sessionId,
         userMessage,
-        halResponse,
-        sensorData,
-        timestamp: Date.now(),
-      })
+        sensorData?.webcam || null,
+        sensorData?.eeg || null
+      )
     );
 
     // 4. Update curiosity engine
