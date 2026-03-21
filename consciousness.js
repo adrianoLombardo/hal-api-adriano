@@ -62,13 +62,15 @@ try {
 } catch (e) {
   console.warn('[CONSCIOUSNESS] curiosity-bonding not available:', e.message);
   CuriosityEngine = class StubCuriosityEngine {
-    update() {}
+    onConversation() {}
     getTopCuriosities() { return []; }
     getPromptSection() { return ''; }
   };
   RelationshipTracker = class StubRelationshipTracker {
-    trackSession() {}
-    updateFromTurn() {}
+    onSessionStart() {}
+    onSessionEnd() {}
+    updateDisclosure() {}
+    evolveStage() {}
     getPromptSection() { return ''; }
     get globalStats() { return { totalSessions: 0, uniqueVisitors: 0 }; }
   };
@@ -224,22 +226,14 @@ class HALConsciousness {
 
     // 4. Update curiosity engine
     this._safeAsync(() =>
-      this.curiosity.update({
-        userMessage,
-        halResponse,
-        sessionId,
-      })
+      this.curiosity.onConversation(userMessage, halResponse)
     );
 
-    // 5. Update relationship tracker
-    this._safeAsync(() =>
-      this.relationships.updateFromTurn(sessionId, {
-        userMessage,
-        halResponse,
-        sensorData,
-        timestamp: Date.now(),
-      })
-    );
+    // 5. Update relationship tracker — track topic + disclosure
+    this._safeAsync(() => {
+      this.relationships.updateDisclosure(sessionId, userMessage);
+      this.relationships.evolveStage(sessionId);
+    });
   }
 
   /* ── onSessionStart ──────────────────────────────────────────
@@ -251,7 +245,7 @@ class HALConsciousness {
 
     try {
       // Track visitor in relationship module
-      this.relationships.trackSession(sessionId, 'start');
+      this.relationships.onSessionStart(sessionId);
     } catch (e) {
       console.warn('[CONSCIOUSNESS] session start tracking error:', e.message);
     }
@@ -304,10 +298,7 @@ class HALConsciousness {
      ─────────────────────────────────────────────────────────── */
   onSessionEnd(sessionId, durationSeconds, messageCount) {
     try {
-      this.relationships.trackSession(sessionId, 'end', {
-        durationSeconds,
-        messageCount,
-      });
+      this.relationships.onSessionEnd(sessionId, durationSeconds, messageCount);
     } catch (e) {
       console.warn('[CONSCIOUSNESS] session end tracking error:', e.message);
     }
