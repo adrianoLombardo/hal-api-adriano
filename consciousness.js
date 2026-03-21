@@ -50,7 +50,7 @@ try {
   UserModel = class StubUserModel {
     update() {}
     getAdaptationPrompt() { return ''; }
-    getProfile() { return null; }
+    getOrCreate() { return null; }
   };
   appraiseTurn = () => ({ emotion: 'neutral', intensity: 0 });
 }
@@ -319,7 +319,7 @@ class HALConsciousness {
 
     try {
       // Get returning visitor info
-      const profile = this.userModel.getProfile(sessionId);
+      const profile = this.userModel.getOrCreate(sessionId);
       if (profile && profile.visitCount > 1) {
         contextParts.push(`Visitatore di ritorno (visita #${profile.visitCount}).`);
         if (profile.interests && profile.interests.length > 0) {
