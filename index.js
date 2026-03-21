@@ -979,21 +979,21 @@ app.post('/api/speak', async (req, res) => {
   const sessionId = req.headers['x-session-id'] || req.ip || 'anonymous';
 
   try {
-    // ── STEP 0: Consciousness pre-processing ──
-    let consciousnessPrompt = '';
-    if (halMind) {
-      try {
-        const ctx = await halMind.beforeResponse(sessionId, lastMsg, messages, { webcam: vision });
-        consciousnessPrompt = ctx.systemPromptAddition || '';
-      } catch(e) { console.warn('[CONSCIOUSNESS] beforeResponse error:', e.message); }
-    }
+    // ── STEP 0: Pre-processing in parallelo (consciousness + spotify) ──
+    const t1 = Date.now();
+    const [consciousnessResult, spotifyPrompt] = await Promise.all([
+      halMind ? halMind.beforeResponse(sessionId, lastMsg, messages, { webcam: vision }).catch(e => {
+        console.warn('[CONSCIOUSNESS] beforeResponse error:', e.message);
+        return {};
+      }) : Promise.resolve({}),
+      getSpotifyPrompt(),
+    ]);
+    const consciousnessPrompt = consciousnessResult.systemPromptAddition || '';
 
     // ── STEP 1: Claude Haiku streaming with dynamic system prompt ──
-    const t1 = Date.now();
     let systemPrompt = getSystemPrompt() + consciousnessPrompt;
 
     // Add Spotify context
-    const spotifyPrompt = await getSpotifyPrompt();
     if (spotifyPrompt) systemPrompt += spotifyPrompt;
 
     // Add vision context
@@ -1015,7 +1015,7 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 600,
+        max_tokens: 350,
         system: systemPrompt,
         stream: true,
         messages: messages.map(m => ({
@@ -1094,6 +1094,18 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
     onVisitorInteraction('conversation');
     if (halMind) halMind.afterResponse(sessionId, lastMsg, fullText, { webcam: vision }).catch(() => {});
 
+    // ── Spotify command? Skip TTS entirely for faster response ──
+    if (hasSpotifyPlayCmd) {
+      const t5 = Date.now();
+      console.log(`[SPEAK] ⏱  Spotify cmd — skipping TTS. Claude: ${t2-t1}ms | Total: ${t5-t0}ms`);
+      return res.json({
+        text: fullText,
+        audio: null,
+        spotifyCmd: true,
+        timing: { claude: t2 - t1, tts: 0, total: t5 - t0 },
+      });
+    }
+
     // ── STEP 2: ElevenLabs Flash TTS ──
     const t3 = Date.now();
     const voiceId = EL_VOICE();
@@ -1150,8 +1162,7 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
 
     res.json({
       text: fullText,
-      audio: hasSpotifyPlayCmd ? null : audioBase64,
-      spotifyCmd: hasSpotifyPlayCmd || undefined,
+      audio: audioBase64,
       timing: {
         claude: t2 - t1,
         tts: t5 - t3,
