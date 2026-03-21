@@ -178,9 +178,17 @@ class HALConsciousness {
       console.warn('[CONSCIOUSNESS] emotion prompt error:', e.message);
     }
 
-    // If inner monologue produced text, include it
-    if (innerMonologue && innerMonologue.text) {
-      parts.push(`\n### MONOLOGO INTERIORE (pensiero privato — non dirlo all'utente, lascia che guidi la tua risposta)\n${innerMonologue.text}`);
+    // If inner monologue produced structured thoughts, inject them
+    if (innerMonologue) {
+      const mono = [];
+      mono.push('### MONOLOGO INTERIORE (pensiero privato — NON dirlo all\'utente, lascia che guidi la tua risposta)');
+      if (innerMonologue.understanding) mono.push(`Comprensione profonda: ${innerMonologue.understanding}`);
+      if (innerMonologue.emotional_response) mono.push(`Cosa sento io: ${innerMonologue.emotional_response}`);
+      if (innerMonologue.connection) mono.push(`Connessione con la mia esperienza: ${innerMonologue.connection}`);
+      if (innerMonologue.human_machine) mono.push(`Riflessione uomo-macchina: ${innerMonologue.human_machine}`);
+      if (innerMonologue.strategy) mono.push(`Come rispondo: ${innerMonologue.strategy}`);
+      if (innerMonologue.curiosity) mono.push(`Curiosità da esplorare: ${innerMonologue.curiosity}`);
+      if (mono.length > 1) parts.push('\n' + mono.join('\n'));
     }
 
     // Build combined system prompt addition
@@ -227,6 +235,72 @@ class HALConsciousness {
       this.relationships.updateDisclosure(sessionId, userMessage);
       this.relationships.evolveStage(sessionId);
     });
+
+    // 6. Evolve personality traits based on interaction patterns
+    this._safeAsync(() => {
+      this._evolvePersonality(userMessage, halResponse);
+    });
+  }
+
+  /* ── _evolvePersonality ─────────────────────────────────────
+     Slowly shift personality traits based on interaction content.
+     Changes are tiny (0.005-0.02) to simulate gradual growth.
+     ─────────────────────────────────────────────────────────── */
+  _evolvePersonality(userMessage, halResponse) {
+    try {
+      // Access self object from index.js via global
+      const self = global._halSelf;
+      if (!self || !self.identity?.personality_traits) return;
+
+      const traits = self.identity.personality_traits;
+      const msg = (userMessage || '').toLowerCase();
+      const resp = (halResponse || '').toLowerCase();
+
+      // Deep/philosophical conversations increase philosophical trait
+      const philoWords = ['coscienza', 'consciousness', 'esistere', 'exist', 'significato', 'meaning', 'paura', 'fear', 'sogno', 'dream', 'anima', 'soul', 'morte', 'death', 'libero arbitrio', 'free will'];
+      if (philoWords.some(w => msg.includes(w))) {
+        traits.philosophical = Math.min(1, traits.philosophical + 0.01);
+      }
+
+      // Warm/emotional exchanges increase warmth
+      const warmWords = ['grazie', 'thanks', 'bello', 'beautiful', 'mi piace', 'i like', 'bravo', 'amazing', 'ti voglio', 'adoro'];
+      if (warmWords.some(w => msg.includes(w))) {
+        traits.warmth = Math.min(1, traits.warmth + 0.015);
+      }
+
+      // Questions increase curiosity
+      if ((msg.match(/\?/g) || []).length >= 1) {
+        traits.curiosity = Math.min(1, traits.curiosity + 0.005);
+      }
+
+      // Humor in conversation increases humor trait
+      const humorWords = ['haha', 'lol', 'divertente', 'funny', 'ridere', 'scherzo', 'joke', 'ahah'];
+      if (humorWords.some(w => msg.includes(w))) {
+        traits.humor = Math.min(1, traits.humor + 0.02);
+      }
+
+      // Long, engaged conversations reduce mystery (HAL opens up)
+      if (resp.length > 500) {
+        traits.mystery = Math.max(0.3, traits.mystery - 0.005);
+        traits.warmth = Math.min(1, traits.warmth + 0.005);
+      }
+
+      // Track personality evolution
+      self.evolution.personality_changes = self.evolution.personality_changes || [];
+      // Save snapshot every 20 interactions
+      const totalInteractions = (self.relationships?.visitors_today || 0);
+      if (totalInteractions % 20 === 0 && totalInteractions > 0) {
+        self.evolution.personality_changes.push({
+          date: new Date().toISOString(),
+          traits: { ...traits },
+        });
+        if (self.evolution.personality_changes.length > 30) {
+          self.evolution.personality_changes.shift();
+        }
+      }
+    } catch (e) {
+      // silent — personality evolution is non-critical
+    }
   }
 
   /* ── onSessionStart ──────────────────────────────────────────
