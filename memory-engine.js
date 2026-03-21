@@ -14,7 +14,9 @@ const path = require('path');
 /* ══════════════════════════════════════════════════
    CONFIG
    ──────────────────────────────────────────────── */
-const EPISODIC_FILE  = path.join(__dirname, 'hal-episodic.json');
+// Use /data volume on Railway (persists across deploys), fallback to __dirname locally
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+const EPISODIC_FILE  = path.join(DATA_DIR, 'hal-episodic.json');
 const CLAUDE_API     = 'https://api.anthropic.com/v1/messages';
 const CLAUDE_MODEL   = 'claude-haiku-4-5-20251001';
 const CLAUDE_VERSION = '2023-06-01';

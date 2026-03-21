@@ -11,8 +11,9 @@
 const fs   = require('fs');
 const path = require('path');
 
-const EMOTION_FILE = path.join(__dirname, 'hal-emotion-state.json');
-const USERS_FILE   = path.join(__dirname, 'hal-user-models.json');
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+const EMOTION_FILE = path.join(DATA_DIR, 'hal-emotion-state.json');
+const USERS_FILE   = path.join(DATA_DIR, 'hal-user-models.json');
 
 // ── Utilities ────────────────────────────────────────────────────
 

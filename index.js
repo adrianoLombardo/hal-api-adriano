@@ -58,9 +58,13 @@ const ADMIN_PWD  = () => (process.env.HAL_ADMIN_PASSWORD || 'hal9000admin').trim
 /* ══════════════════════════════════════════════════
    MEMORY SYSTEM — Persistent Learning
    ──────────────────────────────────────────────── */
-const MEMORY_FILE = path.join(__dirname, 'hal-memory.json');
-const LOGS_FILE   = path.join(__dirname, 'hal-logs.json');
-const SELF_FILE   = path.join(__dirname, 'hal-self.json');
+// Use /data volume on Railway (persists across deploys), fallback to __dirname locally
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+console.log(`[STORAGE] Data directory: ${DATA_DIR}${DATA_DIR === '/data' ? ' (Railway volume)' : ' (local)'}`);
+
+const MEMORY_FILE = path.join(DATA_DIR, 'hal-memory.json');
+const LOGS_FILE   = path.join(DATA_DIR, 'hal-logs.json');
+const SELF_FILE   = path.join(DATA_DIR, 'hal-self.json');
 
 // In-memory stores
 let memory = {

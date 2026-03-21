@@ -9,8 +9,9 @@
 const fs   = require('fs');
 const path = require('path');
 
-const CURIOSITY_FILE    = path.join(__dirname, 'hal-curiosity.json');
-const RELATIONSHIPS_FILE = path.join(__dirname, 'hal-relationships.json');
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+const CURIOSITY_FILE    = path.join(DATA_DIR, 'hal-curiosity.json');
+const RELATIONSHIPS_FILE = path.join(DATA_DIR, 'hal-relationships.json');
 
 /* ── Keyword dictionaries for heuristic extraction ── */
 
