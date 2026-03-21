@@ -37,7 +37,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
   origin: function (origin, cb) {
     // Allow: our domains, localhost, file:// (origin === null/undefined), and admin dashboard
-    const allowed = ['http://localhost:3000', 'https://adrianolombardo.art', 'https://www.adrianolombardo.art'];
+    const allowed = ['http://localhost:3000', 'http://localhost:8000', 'https://adrianolombardo.art', 'https://www.adrianolombardo.art'];
     if (!origin || allowed.includes(origin)) return cb(null, true);
     cb(null, false);
   },
