@@ -656,7 +656,7 @@ ${memoryContext}
 ${userContext}
 ${emotionContext}`;
 
-  const result = await callClaude(system, userPrompt, 250);
+  const result = await callClaude(system, userPrompt, 400);
   if (!result) {
     // Fallback — return a default monologue
     return {
