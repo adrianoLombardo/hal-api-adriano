@@ -1116,9 +1116,11 @@ REGOLE:
 
     if (!res.ok) return;
     const data = await res.json();
-    const text = data.content?.[0]?.text || '{}';
+    let text = data.content?.[0]?.text || '{}';
 
     try {
+      // Strip markdown code fences if Claude wraps JSON in ```
+      text = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
       const thought = JSON.parse(text);
 
       // Update inner state
