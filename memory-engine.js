@@ -658,7 +658,9 @@ ${emotionContext}`;
   }
 
   try {
-    const parsed = JSON.parse(result);
+    // Strip markdown code fences if Claude wraps JSON in ```
+    const cleaned = result.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    const parsed = JSON.parse(cleaned);
     return {
       understanding: parsed.understanding || null,
       strategy: parsed.strategy || null,
