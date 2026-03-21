@@ -56,7 +56,7 @@ const ANTH_KEY   = () => (process.env.ANTHROPIC_API_KEY || '').trim();
 const ADMIN_PWD  = () => (process.env.HAL_ADMIN_PASSWORD || 'hal9000admin').trim();
 
 /* ══════════════════════════════════════════════════
-   MEMORY SYSTEM — Persistent Learning
+   MEMORY SYSTEM — Persistent Learning (v2 volume)
    ──────────────────────────────────────────────── */
 // Use /data volume on Railway (persists across deploys), fallback to __dirname locally
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
