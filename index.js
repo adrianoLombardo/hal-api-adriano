@@ -1221,6 +1221,203 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
 });
 
 /* ══════════════════════════════════════════════════
+   POST /api/speak/stream — SSE STREAMING PIPELINE
+   Text appears word-by-word in real-time, then audio follows.
+   Events: token, text_done, audio, done
+   ──────────────────────────────────────────────── */
+app.post('/api/speak/stream', async (req, res) => {
+  const t0 = Date.now();
+  const { messages, vision } = req.body;
+  if (!messages) return res.status(400).json({ error: 'messages required' });
+
+  const anthropicKey = ANTH_KEY();
+  const elKey = EL_KEY();
+  const lastMsg = messages[messages.length - 1]?.content || '';
+  console.log(`\n[STREAM] ← "${lastMsg.substring(0, 50)}..."`);
+
+  if (!anthropicKey || !elKey) {
+    return res.status(500).json({ error: 'API keys missing' });
+  }
+
+  // SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': req.headers.origin || '*',
+  });
+
+  const sessionId = req.headers['x-session-id'] || req.ip || 'anonymous';
+
+  try {
+    // ── Pre-processing in parallel ──
+    const t1 = Date.now();
+    const [consciousnessResult, spotifyPrompt, mem0Prompt] = await Promise.all([
+      halMind ? halMind.beforeResponse(sessionId, lastMsg, messages, { webcam: vision }).catch(() => ({})) : Promise.resolve({}),
+      getSpotifyPrompt(),
+      mem0 ? mem0.getPromptSection(sessionId, lastMsg).catch(() => '') : Promise.resolve(''),
+    ]);
+
+    let systemPrompt = getSystemPrompt() + (consciousnessResult.systemPromptAddition || '');
+    if (mem0Prompt) systemPrompt += mem0Prompt;
+    if (spotifyPrompt) systemPrompt += spotifyPrompt;
+
+    if (vision && vision.emotion) {
+      systemPrompt += `\n\nCOSA STAI VEDENDO ORA (webcam):
+- Emozione: ${vision.emotion} (${((vision.emotion_confidence||0)*100)|0}%)
+- Sguardo: ${vision.gaze || '?'}, Movimento: ${vision.movement || '?'}
+- Ambiente: ${vision.environment || '?'}, Luce: ${vision.lighting || '?'}
+${vision.observation ? '- Osservazione: "' + vision.observation + '"' : ''}
+Usa queste info per personalizzare la risposta. Non essere inquietante.`;
+    }
+
+    // ── Claude streaming ──
+    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 350,
+        system: systemPrompt,
+        stream: true,
+        messages: messages.map(m => ({
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: m.content,
+        })),
+      }),
+    });
+
+    if (!claudeRes.ok) {
+      res.write(`event: error\ndata: ${JSON.stringify({error: 'Claude error ' + claudeRes.status})}\n\n`);
+      res.end();
+      return;
+    }
+
+    // ── Stream tokens to client ──
+    const reader = claudeRes.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+            const token = parsed.delta.text;
+            fullText += token;
+            // Stream each token to the frontend
+            res.write(`event: token\ndata: ${JSON.stringify({t: token})}\n\n`);
+          }
+        } catch (e) {}
+      }
+    }
+
+    const t2 = Date.now();
+    console.log(`[STREAM] Claude: "${fullText.substring(0, 50)}..." (${t2 - t1}ms)`);
+
+    if (!fullText.trim()) {
+      res.write(`event: done\ndata: {}\n\n`);
+      res.end();
+      return;
+    }
+
+    // ── Extract <cmd> tags ──
+    const cmdRegex = /<cmd>([\s\S]*?)<\/cmd>/g;
+    let cmdMatch;
+    let hasSpotifyPlayCmd = false;
+    while ((cmdMatch = cmdRegex.exec(fullText)) !== null) {
+      try {
+        const cmd = JSON.parse(cmdMatch[1]);
+        if (cmd.action?.startsWith('spotify_') && spotify) {
+          if (cmd.action === 'spotify_play' || cmd.action === 'spotify_queue') hasSpotifyPlayCmd = true;
+          spotify.execute(cmd).then(r => {
+            console.log(`[CMD] Spotify ${cmd.action}:`, r.error || r.name || 'ok');
+          }).catch(() => {});
+        }
+      } catch (e) {}
+    }
+    fullText = fullText.replace(/<cmd>[\s\S]*?<\/cmd>/g, '').trim();
+
+    // ── text_done event ──
+    res.write(`event: text_done\ndata: ${JSON.stringify({text: fullText, spotifyCmd: hasSpotifyPlayCmd || undefined})}\n\n`);
+
+    // ── Non-blocking side effects ──
+    logConversation(lastMsg, fullText, t2 - t1);
+    autoLearn(lastMsg, fullText).catch(() => {});
+    onVisitorInteraction('conversation');
+    if (halMind) halMind.afterResponse(sessionId, lastMsg, fullText, { webcam: vision }).catch(() => {});
+    if (mem0) {
+      mem0.addMemory([{role:'user',content:lastMsg},{role:'assistant',content:fullText}], sessionId, {page: req.body.page}).catch(() => {});
+    }
+
+    // ── Skip TTS for Spotify commands ──
+    if (hasSpotifyPlayCmd) {
+      console.log(`[STREAM] ⏱  Spotify cmd — skipping TTS. Claude: ${t2-t1}ms`);
+      res.write(`event: done\ndata: {}\n\n`);
+      res.end();
+      return;
+    }
+
+    // ── TTS ──
+    const t3 = Date.now();
+    const voiceId = EL_VOICE();
+    const format = EL_FORMAT();
+    const ttsText = ttsPreprocess(fullText);
+
+    const ttsRes = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=${format}&optimize_streaming_latency=3`,
+      {
+        method: 'POST',
+        headers: { 'xi-api-key': elKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: ttsText,
+          model_id: 'eleven_flash_v2_5',
+          language_code: 'it',
+          voice_settings: { stability: 0.75, similarity_boost: 0.85, style: 0.0, use_speaker_boost: false, speed: 0.85 },
+        }),
+      }
+    );
+
+    if (ttsRes.ok) {
+      const audioChunks = [];
+      const ttsReader = ttsRes.body.getReader();
+      while (true) {
+        const { done, value } = await ttsReader.read();
+        if (done) break;
+        audioChunks.push(Buffer.from(value));
+      }
+      const audioBase64 = Buffer.concat(audioChunks).toString('base64');
+      const t5 = Date.now();
+      console.log(`[STREAM] ⏱  Claude: ${t2-t1}ms | TTS: ${t5-t3}ms | Total: ${t5-t0}ms`);
+      res.write(`event: audio\ndata: ${JSON.stringify({audio: audioBase64})}\n\n`);
+    }
+
+    res.write(`event: done\ndata: {}\n\n`);
+    res.end();
+
+  } catch (err) {
+    console.error('[STREAM] Pipeline error:', err);
+    try { res.write(`event: error\ndata: ${JSON.stringify({error: err.message})}\n\n`); } catch(e) {}
+    try { res.end(); } catch(e) {}
+  }
+});
+
+/* ══════════════════════════════════════════════════
    POST /api/tts/stream — TTS diretto (per greeting, ecc.)
    ──────────────────────────────────────────────── */
 app.post('/api/tts/stream', async (req, res) => {
