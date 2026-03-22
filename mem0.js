@@ -93,20 +93,14 @@ async function searchMemories(query, visitorId, topK = 5) {
       body: {
         query,
         filters: {
-          OR: [
-            { user_id: visitorId },
-            { agent_id: 'hal9000' },
-          ],
+          user_id: visitorId,
         },
         top_k: topK,
-        threshold: 0.3,
       },
     });
 
     const memories = Array.isArray(result) ? result : (result.results || []);
-    if (memories.length > 0) {
-      console.log(`[MEM0] Found ${memories.length} relevant memories for ${visitorId}`);
-    }
+    console.log(`[MEM0] Search "${query.substring(0,40)}..." → ${memories.length} memories for ${visitorId}`);
     return memories;
   } catch (e) {
     console.warn('[MEM0] Search error:', e.message);
@@ -156,6 +150,7 @@ async function getPromptSection(visitorId, currentMessage) {
 
     section += '\nATTENZIONE: Non elencare questi ricordi all\'utente. Usali naturalmente nella conversazione, come farebbe una persona che ricorda.\n';
 
+    console.log(`[MEM0] Prompt section: ${memories.length} memories injected for ${visitorId}`);
     return section;
   } catch (e) {
     console.warn('[MEM0] Prompt section error:', e.message);
