@@ -88,22 +88,25 @@ async function searchMemories(query, visitorId, topK = 5) {
   if (!apiKey || !visitorId) return [];
 
   try {
+    const searchBody = {
+      query,
+      filters: { user_id: visitorId },
+      top_k: topK,
+    };
+    console.log(`[MEM0] Searching: query="${query.substring(0,30)}", user=${visitorId}`);
     const result = await mem0Fetch('/v2/memories/search/', {
       method: 'POST',
-      body: {
-        query,
-        filters: {
-          user_id: visitorId,
-        },
-        top_k: topK,
-      },
+      body: searchBody,
     });
 
     const memories = Array.isArray(result) ? result : (result.results || []);
     console.log(`[MEM0] Search "${query.substring(0,40)}..." → ${memories.length} memories for ${visitorId}`);
+    if (memories.length === 0 && result) {
+      console.log(`[MEM0] Raw response type: ${typeof result}, keys: ${Object.keys(result || {}).join(',')}`);
+    }
     return memories;
   } catch (e) {
-    console.warn('[MEM0] Search error:', e.message);
+    console.warn('[MEM0] Search error:', e.message, e.stack?.split('\n')[1] || '');
     return [];
   }
 }
