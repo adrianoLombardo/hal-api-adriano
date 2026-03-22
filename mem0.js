@@ -45,7 +45,13 @@ async function mem0Fetch(path, opts = {}) {
     throw new Error(`Mem0 ${res.status}: ${err.substring(0, 200)}`);
   }
   if (res.status === 204) return { ok: true };
-  return res.json();
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch(e) {
+    console.warn(`[MEM0] JSON parse failed for: ${text.substring(0, 100)}`);
+    return {};
+  }
 }
 
 /* ── Add memories from a conversation ──────────── */
