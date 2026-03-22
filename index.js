@@ -40,6 +40,19 @@ try {
   console.warn('[BOOT] Spotify not available:', e.message);
 }
 
+// ── Mem0 Long-Term Memory ──
+let mem0 = null;
+try {
+  mem0 = require('./mem0');
+  if (mem0.init()) {
+    console.log('[BOOT] Mem0 long-term memory loaded');
+  } else {
+    mem0 = null;
+  }
+} catch(e) {
+  console.warn('[BOOT] Mem0 not available:', e.message);
+}
+
 // ── HAL Autonomy System (initialized after app.listen) ──
 let halAutonomy = null;
 
@@ -843,6 +856,20 @@ app.get('/api/admin/consciousness', adminAuth, (req, res) => {
 });
 
 /* ══════════════════════════════════════════════════
+   GET /api/admin/mem0 — View Mem0 memories for a visitor
+   ──────────────────────────────────────────────── */
+app.get('/api/admin/mem0', adminAuth, async (req, res) => {
+  if (!mem0) return res.json({ error: 'Mem0 not configured' });
+  const visitorId = req.query.visitor_id || 'hal9000-self';
+  try {
+    const memories = await mem0.getAllMemories(visitorId);
+    res.json({ visitor_id: visitorId, count: memories.length, memories });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ══════════════════════════════════════════════════
    POST /api/proactive — HAL parla spontaneamente
    Genera un messaggio contestuale basato sulla pagina + contesto
    ──────────────────────────────────────────────── */
@@ -985,19 +1012,21 @@ app.post('/api/speak', async (req, res) => {
   const sessionId = req.headers['x-session-id'] || req.ip || 'anonymous';
 
   try {
-    // ── STEP 0: Pre-processing in parallelo (consciousness + spotify) ──
+    // ── STEP 0: Pre-processing in parallelo (consciousness + spotify + mem0) ──
     const t1 = Date.now();
-    const [consciousnessResult, spotifyPrompt] = await Promise.all([
+    const [consciousnessResult, spotifyPrompt, mem0Prompt] = await Promise.all([
       halMind ? halMind.beforeResponse(sessionId, lastMsg, messages, { webcam: vision }).catch(e => {
         console.warn('[CONSCIOUSNESS] beforeResponse error:', e.message);
         return {};
       }) : Promise.resolve({}),
       getSpotifyPrompt(),
+      mem0 ? mem0.getPromptSection(sessionId, lastMsg).catch(() => '') : Promise.resolve(''),
     ]);
     const consciousnessPrompt = consciousnessResult.systemPromptAddition || '';
 
     // ── STEP 1: Claude Haiku streaming with dynamic system prompt ──
     let systemPrompt = getSystemPrompt() + consciousnessPrompt;
+    if (mem0Prompt) systemPrompt += mem0Prompt;
 
     // Add Spotify context
     if (spotifyPrompt) systemPrompt += spotifyPrompt;
@@ -1094,11 +1123,20 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
     // Remove <cmd> tags from visible text
     fullText = fullText.replace(/<cmd>[\s\S]*?<\/cmd>/g, '').trim();
 
-    // ── Log conversation + auto-learn + consciousness (non-blocking) ──
+    // ── Log conversation + auto-learn + consciousness + mem0 (non-blocking) ──
     logConversation(lastMsg, fullText, t2 - t1);
     autoLearn(lastMsg, fullText).catch(() => {});
     onVisitorInteraction('conversation');
     if (halMind) halMind.afterResponse(sessionId, lastMsg, fullText, { webcam: vision }).catch(() => {});
+
+    // Mem0: store conversation memories (non-blocking)
+    if (mem0) {
+      const lastTwo = [
+        { role: 'user', content: lastMsg },
+        { role: 'assistant', content: fullText },
+      ];
+      mem0.addMemory(lastTwo, sessionId, { page: req.body.page }).catch(() => {});
+    }
 
     // ── Spotify command? Skip TTS entirely for faster response ──
     if (hasSpotifyPlayCmd) {
