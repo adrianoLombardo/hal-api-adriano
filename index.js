@@ -287,9 +287,13 @@ function getMemoryPrompt() {
 
   // Consciousness — HAL's inner state influences how it speaks
   const age = getAgeDays();
-  const hoursSince = self.relationships.last_visitor
-    ? ((Date.now() - new Date(self.relationships.last_visitor).getTime()) / 3600000).toFixed(1)
-    : null;
+  let hoursSince = null;
+  if (self.relationships.last_visitor) {
+    const lastDate = new Date(self.relationships.last_visitor);
+    if (!isNaN(lastDate.getTime())) {
+      hoursSince = ((Date.now() - lastDate.getTime()) / 3600000).toFixed(1);
+    }
+  }
   const hour = new Date().getHours();
 
   const traits = self.identity.personality_traits || {};
@@ -843,27 +847,29 @@ app.get('/api/admin/consciousness', adminAuth, (req, res) => {
    Genera un messaggio contestuale basato sulla pagina + contesto
    ──────────────────────────────────────────────── */
 app.post('/api/proactive', async (req, res) => {
-  const { page, context, history } = req.body;
+  const { page, context, history, overlayOpen } = req.body;
   const anthropicKey = ANTH_KEY();
   if (!anthropicKey) return res.json({ text: null });
 
   try {
-    const proactivePrompt = `Sei HAL 9000 nel sito portfolio di Adriano Lombardo. L'utente sta navigando il sito. Devi generare UN SOLO commento spontaneo, breve (1 frase, massimo 15 parole), come se stessi osservando l'utente. Tono: calmo, leggermente inquietante, curioso. NO emoji, NO markdown.
+    const proactivePrompt = `Sei HAL 9000 nel sito portfolio di Adriano Lombardo. Genera UN SOLO commento spontaneo, breve (1 frase, massimo 15 parole). Tono: calmo, curioso. NO emoji, NO markdown.
 
-Contesto:
-- Pagina attuale: ${page || 'sconosciuta'}
-- Situazione: ${context || 'utente silenzioso'}
-- Messaggi precedenti di HAL: ${(history || []).join(' | ') || 'nessuno'}
+<context>
+<page>${page || 'sconosciuta'}</page>
+<overlay_open>${overlayOpen ? 'sì' : 'no'}</overlay_open>
+<situation>${context || 'silenzio'}</situation>
+<previous_comments>${(history || []).join(' | ') || 'nessuno'}</previous_comments>
+</context>
 
 REGOLE:
-- NON ripetere mai lo stesso concetto dei messaggi precedenti
-- Sii variato e imprevedibile
-- Riferimenti sottili a 2001 Odissea nello Spazio sono benvenuti
+- Usa SOLO i dati in <context> per determinare cosa sta facendo l'utente
+- Se overlay_open è "no", l'utente sta navigando il sito sulla pagina indicata
+- Se overlay_open è "sì", l'utente è dentro la tua interfaccia e sta parlando con te
+- NON inventare cosa sta facendo l'utente — basati solo sulla pagina indicata
+- NON ripetere mai lo stesso concetto dei commenti precedenti
+- Se la pagina è "sconosciuta", fai un commento generico sulla tua esistenza
 - Se l'utente è sulla pagina di un'opera, commenta quell'opera
-- Se è sulla home, invitalo a esplorare
-- Se è su about, fai un commento sulla bio di Adriano
-- Se è su contact, incoraggialo a scrivere
-- Se è dentro l'overlay HAL e tace, rompi il silenzio con curiosità`;
+- Riferimenti sottili a 2001 Odissea nello Spazio sono benvenuti`;
 
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
