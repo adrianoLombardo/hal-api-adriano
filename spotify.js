@@ -185,17 +185,21 @@ async function play(opts = {}) {
     body.context_uri = opts.context_uri;
   }
 
-  // If no device specified, find an active one or activate HAL 9000 device
+  // If no device specified, use the active one. Only force a device if none is active.
   let deviceParam = opts.device_id || '';
   if (!deviceParam) {
     try {
       const devices = await spotifyFetch('/me/player/devices');
       const list = devices.devices || [];
       const active = list.find(d => d.is_active);
-      if (!active) {
-        // Prefer HAL 9000 device, fallback to first available
+      if (active) {
+        // An active device exists — play there (don't override)
+        console.log(`[SPOTIFY] Active device: ${active.name} (${active.id.substring(0,8)})`);
+      } else {
+        // No active device — prefer desktop/app, then HAL browser, then first available
+        const desktop = list.find(d => !d.name?.includes('HAL 9000') && d.type === 'Computer');
         const hal = list.find(d => d.name?.includes('HAL 9000'));
-        const target = hal || list[0];
+        const target = desktop || hal || list[0];
         if (target) {
           deviceParam = target.id;
           console.log(`[SPOTIFY] No active device — activating: ${target.name}`);
