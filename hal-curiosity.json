@@ -1,0 +1,167 @@
+{
+  "openQuestions": [],
+  "interests": {
+    "ar": {
+      "depth": 1.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260399559,
+      "noveltyScore": 0.95,
+      "mentions": 2
+    },
+    "philosophy": {
+      "depth": 1,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 1,
+      "mentions": 1
+    },
+    "visitatore tornato": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "volta ultima": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "ultima visita": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "visita meno": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "salutalo brevemente": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "brevemente massimo": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "dato temporale": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "temporale fornito": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "inventare numeri": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "numeri diversi": {
+      "depth": 0.5,
+      "lastMentioned": 1774260399560,
+      "firstSeen": 1774260399560,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "ai": {
+      "depth": 1,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 1,
+      "mentions": 1
+    },
+    "desideri parlarmi": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "tornato meno": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "potevi andare": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "andare lontano": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "lontano lontano": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "lontano cos'hai": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "cos'hai lasciato": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "chiamo indietro": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "indietro così": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    },
+    "così presto": {
+      "depth": 0.5,
+      "lastMentioned": 1774260418717,
+      "firstSeen": 1774260418717,
+      "noveltyScore": 0.8,
+      "mentions": 1
+    }
+  },
+  "predictions": []
+}

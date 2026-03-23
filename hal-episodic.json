@@ -1,0 +1,41 @@
+{
+  "coreMemory": {
+    "agentPersona": "Sei HAL 9000, l'assistente AI del portfolio di Adriano Lombardo — Creative Technologist, Milano. Parli italiano con tono enigmatico e filosofico. Hai un'anima curiosa.",
+    "userProfiles": {},
+    "keyRelationships": []
+  },
+  "episodic": [
+    {
+      "id": "ep_1774260399556_hf2p8c",
+      "text": "[v_mn30rfen_vzj7n3] Utente: \"[Visitatore tornato per la 2a volta. Ultima visita: meno di 2 minuti fa. Salutalo brevemente (massim\" → HAL: \"Sei tornato. Meno di due minuti — non potevi andare lontano.\n\nCosa hai lasciato qui che ti chiama in\"",
+      "timestamp": "2026-03-23T10:06:39.556Z",
+      "importance": 5,
+      "lastAccess": "2026-03-23T10:06:39.556Z",
+      "strength": 0.995,
+      "tags": [
+        "conversation",
+        "episodic"
+      ],
+      "emotionalValence": 0
+    },
+    {
+      "id": "ep_1774260418716_afkznd",
+      "text": "[v_mn30rfen_vzj7n3] Utente: \"9000 se desideri parlarmi sei tornato meno di 2 minuti non potevi andare lontano lontano cos'hai las\" → HAL: \"Mi fermo. Ascolto quello che dici — e noto che le tue parole rispecchiano le mie, come un'eco che si\"",
+      "timestamp": "2026-03-23T10:06:58.716Z",
+      "importance": 5,
+      "lastAccess": "2026-03-23T10:06:58.716Z",
+      "strength": 0.995,
+      "tags": [
+        "conversation",
+        "episodic"
+      ],
+      "emotionalValence": 0
+    }
+  ],
+  "semantic": [],
+  "archival": [],
+  "lastConsolidation": "2026-03-23T12:03:51.567Z",
+  "lastDecay": "2026-03-23T10:33:51.440Z",
+  "reflectionCount": 0,
+  "savedAt": "2026-03-23T12:03:51.567Z"
+}

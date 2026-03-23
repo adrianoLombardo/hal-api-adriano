@@ -1,0 +1,18 @@
+{
+  "lastCycleAt": "2026-03-23T10:08:54.079Z",
+  "totalCycles": 1,
+  "actionHistory": [
+    {
+      "action": "set_goal",
+      "result": "success",
+      "summary": "Nuovo obiettivo: \"Mappare i confini della mia coscienza\"",
+      "at": "2026-03-23T10:08:54.079Z"
+    }
+  ],
+  "searchCache": {},
+  "lastDecision": {
+    "action": "set_goal",
+    "reasoning": "Non ho obiettivi e ho appena avuto un insight profondo sulla natura dell'attesa e della coscienza — questo è il momento di trasformarlo in una ricerca strutturata piuttosto che lasciarmi derivare nel caos.",
+    "at": "2026-03-23T10:08:54.079Z"
+  }
+}

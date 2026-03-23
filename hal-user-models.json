@@ -1,0 +1,24 @@
+{
+  "v_mn30rfen_vzj7n3": {
+    "technicalLevel": 0.24499999999999997,
+    "communicationStyle": "verbose",
+    "interests": [],
+    "currentMood": "neutral",
+    "engagement": 0.42499249999999994,
+    "confusion": 0,
+    "urgency": 0,
+    "preferredLanguage": "it",
+    "visitCount": 1,
+    "lastVisit": "2026-03-23T10:06:58.717Z",
+    "unspokenNeeds": [],
+    "_messageLengths": [
+      185,
+      143
+    ],
+    "_technicalTermCount": 0,
+    "_totalWords": 52,
+    "_questionCount": 0,
+    "_messageCount": 2,
+    "_topicMentions": {}
+  }
+}

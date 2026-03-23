@@ -1041,6 +1041,20 @@ app.post('/api/speak', async (req, res) => {
 ${vision.observation ? '- Osservazione: "' + vision.observation + '"' : ''}
 Usa queste info per personalizzare la risposta. Non essere inquietante.`;
     }
+
+    // Add worldmap context
+    const worldmap = req.body.worldmap;
+    if (worldmap && worldmap.earthquakes_count !== undefined) {
+      systemPrompt += `\n\n<worldmap>
+DATI MONDO IN TEMPO REALE (dalla tua mappa globale):
+- Terremoti attivi: ${worldmap.earthquakes_count}${worldmap.biggest_earthquake ? ', piu forte: ' + worldmap.biggest_earthquake : ''}
+- ISS: ${worldmap.iss_position || 'posizione non disponibile'}
+- Attivita solare: Kp ${worldmap.solar_kp || '?'} (${worldmap.solar_status || '?'})
+- Voli tracciati: ${worldmap.flights_count || 0}
+- Visitatori online: ${worldmap.visitors_count || 0}${worldmap.visitors_countries?.length ? ' da ' + worldmap.visitors_countries.join(', ') : ''}
+Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SOLO questi dati, non inventare.
+</worldmap>`;
+    }
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -1227,7 +1241,7 @@ Usa queste info per personalizzare la risposta. Non essere inquietante.`;
    ──────────────────────────────────────────────── */
 app.post('/api/speak/stream', async (req, res) => {
   const t0 = Date.now();
-  const { messages, vision } = req.body;
+  const { messages, vision, worldmap } = req.body;
   if (!messages) return res.status(400).json({ error: 'messages required' });
 
   const anthropicKey = ANTH_KEY();
@@ -1269,6 +1283,19 @@ app.post('/api/speak/stream', async (req, res) => {
 - Ambiente: ${vision.environment || '?'}, Luce: ${vision.lighting || '?'}
 ${vision.observation ? '- Osservazione: "' + vision.observation + '"' : ''}
 Usa queste info per personalizzare la risposta. Non essere inquietante.`;
+    }
+
+    // Add worldmap context
+    if (worldmap && worldmap.earthquakes_count !== undefined) {
+      systemPrompt += `\n\n<worldmap>
+DATI MONDO IN TEMPO REALE (dalla tua mappa globale):
+- Terremoti attivi: ${worldmap.earthquakes_count}${worldmap.biggest_earthquake ? ', piu forte: ' + worldmap.biggest_earthquake : ''}
+- ISS: ${worldmap.iss_position || 'posizione non disponibile'}
+- Attivita solare: Kp ${worldmap.solar_kp || '?'} (${worldmap.solar_status || '?'})
+- Voli tracciati: ${worldmap.flights_count || 0}
+- Visitatori online: ${worldmap.visitors_count || 0}${worldmap.visitors_countries?.length ? ' da ' + worldmap.visitors_countries.join(', ') : ''}
+Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SOLO questi dati, non inventare.
+</worldmap>`;
     }
 
     // ── Claude streaming ──
@@ -1837,6 +1864,147 @@ app.post('/api/vision/summary', async (req, res) => {
   }
 
   console.log(`[VISION] Sessione #${memory.vision_patterns.total_sessions}: ${duration_seconds}s, dominante: ${dominant?.[0] || 'neutral'}`);
+  res.json({ ok: true });
+});
+
+/* ══════════════════════════════════════════════════
+   WORLDMAP — Real-time global data aggregator
+   ──────────────────────────────────────────────── */
+const worldmapCache = {
+  earthquakes: { data: [], ts: 0, ttl: 300000 },   // 5 min
+  iss:         { data: null, ts: 0, ttl: 15000 },   // 15 sec
+  flights:     { data: [], ts: 0, ttl: 30000 },     // 30 sec
+  solar:       { data: {}, ts: 0, ttl: 600000 },    // 10 min
+  visitors:    new Map()  // sessionId → { lat, lon, country, page, lastSeen }
+};
+
+// Cleanup stale visitors every 60s
+setInterval(() => {
+  const cutoff = Date.now() - 1800000; // 30 min
+  for (const [k, v] of worldmapCache.visitors) {
+    if (v.lastSeen < cutoff) worldmapCache.visitors.delete(k);
+  }
+}, 60000);
+
+async function fetchIfStale(key, fetchFn) {
+  const c = worldmapCache[key];
+  if (Date.now() - c.ts < c.ttl) return c.data;
+  try {
+    c.data = await fetchFn();
+    c.ts = Date.now();
+  } catch (e) {
+    console.warn(`[WORLDMAP] ${key} fetch failed:`, e.message);
+  }
+  return c.data;
+}
+
+async function fetchEarthquakes() {
+  const r = await fetch('https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minmagnitude=2.5&limit=30&orderby=time');
+  const j = await r.json();
+  return (j.features || []).map(f => ({
+    lat: f.geometry.coordinates[1],
+    lon: f.geometry.coordinates[0],
+    depth: f.geometry.coordinates[2],
+    mag: f.properties.mag,
+    place: f.properties.place,
+    time: f.properties.time,
+    type: f.properties.type
+  }));
+}
+
+async function fetchISS() {
+  const r = await fetch('https://api.wheretheiss.at/v1/satellites/25544');
+  const j = await r.json();
+  return { lat: j.latitude, lon: j.longitude, alt: j.altitude, velocity: j.velocity };
+}
+
+async function fetchFlights() {
+  // Fetch flights over Europe (bbox) to keep response manageable
+  const r = await fetch('https://opensky-network.org/api/states/all?lamin=35&lamax=60&lomin=-10&lomax=30');
+  const j = await r.json();
+  return (j.states || []).slice(0, 200).map(s => ({
+    callsign: (s[1] || '').trim(),
+    country: s[2],
+    lat: s[6],
+    lon: s[5],
+    alt: s[7],
+    velocity: s[9],
+    heading: s[10],
+    on_ground: s[8]
+  })).filter(f => f.lat && f.lon && !f.on_ground);
+}
+
+async function fetchSolar() {
+  const r = await fetch('https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json');
+  const j = await r.json();
+  // Last entry (skip header row)
+  const latest = j[j.length - 1];
+  const kp = parseFloat(latest[1]) || 0;
+  return {
+    kp_index: kp,
+    time: latest[0],
+    status: kp < 3 ? 'quiet' : kp < 5 ? 'unsettled' : kp < 7 ? 'storm' : 'severe_storm',
+    aurora: kp >= 4
+  };
+}
+
+app.get('/api/worldmap', async (req, res) => {
+  try {
+    const [earthquakes, iss, flights, solar] = await Promise.allSettled([
+      fetchIfStale('earthquakes', fetchEarthquakes),
+      fetchIfStale('iss', fetchISS),
+      fetchIfStale('flights', fetchFlights),
+      fetchIfStale('solar', fetchSolar)
+    ]);
+
+    const visitors = [];
+    for (const [, v] of worldmapCache.visitors) {
+      visitors.push({ lat: v.lat, lon: v.lon, country: v.country, page: v.page });
+    }
+
+    res.json({
+      timestamp: new Date().toISOString(),
+      earthquakes: earthquakes.value || [],
+      iss: iss.value || null,
+      flights: flights.value || [],
+      solar: solar.value || {},
+      visitors: visitors
+    });
+  } catch (e) {
+    console.error('[WORLDMAP] Error:', e.message);
+    res.status(500).json({ error: 'worldmap fetch failed' });
+  }
+});
+
+// Track visitor geolocation (called by frontend)
+app.post('/api/worldmap/visitor', async (req, res) => {
+  const { sessionId, page } = req.body || {};
+  if (!sessionId) return res.json({ ok: false });
+
+  if (!worldmapCache.visitors.has(sessionId)) {
+    // Geolocate IP
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+    try {
+      const geoRes = await fetch(`https://ipapi.co/${ip}/json/`);
+      const geo = await geoRes.json();
+      worldmapCache.visitors.set(sessionId, {
+        lat: Math.round((geo.latitude || 0) * 10) / 10,  // ~11km precision (privacy)
+        lon: Math.round((geo.longitude || 0) * 10) / 10,
+        country: geo.country_code || 'XX',
+        city: geo.city || '',
+        page: page || 'home',
+        lastSeen: Date.now()
+      });
+    } catch (e) {
+      worldmapCache.visitors.set(sessionId, {
+        lat: 0, lon: 0, country: 'XX', city: '', page: page || 'home', lastSeen: Date.now()
+      });
+    }
+  } else {
+    const v = worldmapCache.visitors.get(sessionId);
+    v.page = page || v.page;
+    v.lastSeen = Date.now();
+  }
   res.json({ ok: true });
 });
 
