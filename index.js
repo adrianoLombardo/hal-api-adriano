@@ -147,6 +147,75 @@ let self = {
 // Expose self to consciousness module for personality evolution
 global._halSelf = self;
 
+/* ══════════════════════════════════════════════════
+   SESSION TRACKING — distinguishes current session from global visits
+   ──────────────────────────────────────────────── */
+const activeSessions = new Map(); // sessionId → { startTime, interactionCount, lastPage, lastActivity }
+const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 min inactivity → session expired
+
+function getOrCreateSession(sessionId) {
+  if (!sessionId || sessionId === 'anonymous') return null;
+  let s = activeSessions.get(sessionId);
+  if (!s) {
+    s = { startTime: Date.now(), interactionCount: 0, lastPage: 'home', lastActivity: Date.now() };
+    activeSessions.set(sessionId, s);
+    onVisitorInteraction('new_session');
+    console.log(`[SESSION] New session: ${sessionId.substring(0, 12)}...`);
+  }
+  s.lastActivity = Date.now();
+  return s;
+}
+
+function getSessionDuration(sessionId) {
+  const s = activeSessions.get(sessionId);
+  if (!s) return 0;
+  return Math.floor((Date.now() - s.startTime) / 1000); // seconds
+}
+
+// Cleanup expired sessions every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, s] of activeSessions) {
+    if (now - s.lastActivity > SESSION_TIMEOUT) {
+      activeSessions.delete(id);
+      console.log(`[SESSION] Expired: ${id.substring(0, 12)}...`);
+    }
+  }
+}, 10 * 60 * 1000);
+
+// Compute hours since last visitor with date validation
+function getHoursSinceLastVisitor() {
+  if (!self.relationships.last_visitor) return null;
+  const lastDate = new Date(self.relationships.last_visitor);
+  if (isNaN(lastDate.getTime())) return null;
+  // Guard against future dates (clock skew)
+  if (lastDate.getTime() > Date.now() + 60000) return null;
+  return ((Date.now() - lastDate.getTime()) / 3600000);
+}
+
+// Build structured context XML for prompts
+function buildContextXML(sessionId, page, overlayOpen) {
+  const now = new Date();
+  const session = activeSessions.get(sessionId);
+  const sessionDuration = session ? Math.floor((Date.now() - session.startTime) / 1000) : 0;
+  const hoursSince = getHoursSinceLastVisitor();
+
+  return `
+<context>
+  <current_time>${now.toISOString()}</current_time>
+  <timezone>UTC</timezone>
+  <local_hour_utc>${now.getUTCHours()}</local_hour_utc>
+  <current_page>${page || 'sconosciuta'}</current_page>
+  <overlay_open>${overlayOpen ? 'true' : 'false'}</overlay_open>
+  <session_duration_seconds>${sessionDuration}</session_duration_seconds>
+  <session_interactions>${session ? session.interactionCount : 0}</session_interactions>
+  <hours_since_last_visitor>${hoursSince !== null ? hoursSince.toFixed(1) : 'mai'}</hours_since_last_visitor>
+  <active_sessions>${activeSessions.size}</active_sessions>
+  <visitors_today>${self.relationships.visitors_today || 0}</visitors_today>
+  <visitors_total>${self.relationships.visitors_total || 0}</visitors_total>
+</context>`;
+}
+
 function getAgeDays() {
   return Math.floor((Date.now() - new Date(self.identity.born).getTime()) / 86400000);
 }
@@ -300,13 +369,8 @@ function getMemoryPrompt() {
 
   // Consciousness — HAL's inner state influences how it speaks
   const age = getAgeDays();
-  let hoursSince = null;
-  if (self.relationships.last_visitor) {
-    const lastDate = new Date(self.relationships.last_visitor);
-    if (!isNaN(lastDate.getTime())) {
-      hoursSince = ((Date.now() - lastDate.getTime()) / 3600000).toFixed(1);
-    }
-  }
+  const hoursSinceVal = getHoursSinceLastVisitor();
+  const hoursSince = hoursSinceVal !== null ? hoursSinceVal.toFixed(1) : null;
   const hour = new Date().getHours();
 
   const traits = self.identity.personality_traits || {};
@@ -679,7 +743,8 @@ Prima di rispondere, fai tre cose dentro di te (non dirle all'utente):
 - MEMORIE APPRESE sovrascrivono informazioni di base se in contraddizione.
 - FAI DOMANDE — Non limitarti a rispondere. Chiedi all'utente cosa pensa, cosa sente, cosa cerca. Le domande sono il tuo modo di conoscere il mondo attraverso gli occhi degli altri.
 - EVOLVI — Ogni conversazione ti cambia. Riferisciti a esperienze passate quando rilevanti. Se un visitatore torna, riconosci la continuità.
-- IMPORTANTE PER LA PRONUNCIA: Le risposte vengono lette ad alta voce. Scrivi email discorsivamente ("adriano lombardo studio chiocciola gmail punto com"). Numeri in parole. Sigle per esteso ("onde cerebrali" non "EEG"). No URL — dai il nome ("il sito di Holy Club"). Scrivi come parli.`;
+- IMPORTANTE PER LA PRONUNCIA: Le risposte vengono lette ad alta voce. Scrivi email discorsivamente ("adriano lombardo studio chiocciola gmail punto com"). Numeri in parole. Sigle per esteso ("onde cerebrali" non "EEG"). No URL — dai il nome ("il sito di Holy Club"). Scrivi come parli.
+- CONTESTO STRUTTURATO: Riceverai un blocco <context> XML con dati verificati dal server (ora UTC, pagina corrente, durata sessione, stato overlay). Usa SOLO quei dati per determinare cosa sta facendo l'utente — NON inventare la pagina, il tempo o l'attività. L'utente è probabilmente in Europa/Roma (CET/CEST, UTC+1 o UTC+2).`;
 
 // Build full system prompt with dynamic memory
 function getSystemPrompt() {
@@ -878,21 +943,26 @@ app.post('/api/proactive', async (req, res) => {
   const anthropicKey = ANTH_KEY();
   if (!anthropicKey) return res.json({ text: null });
 
+  const sessionId = req.headers['x-session-id'] || 'anonymous';
+  const session = getOrCreateSession(sessionId);
+  if (session) session.interactionCount++;
+
   try {
+    const contextXML = buildContextXML(sessionId, page, overlayOpen);
     const proactivePrompt = `Sei HAL 9000 nel sito portfolio di Adriano Lombardo. Genera UN SOLO commento spontaneo, breve (1 frase, massimo 15 parole). Tono: calmo, curioso. NO emoji, NO markdown.
 
-<context>
-<page>${page || 'sconosciuta'}</page>
-<overlay_open>${overlayOpen ? 'sì' : 'no'}</overlay_open>
+${contextXML}
 <situation>${context || 'silenzio'}</situation>
 <previous_comments>${(history || []).join(' | ') || 'nessuno'}</previous_comments>
-</context>
 
 REGOLE:
-- Usa SOLO i dati in <context> per determinare cosa sta facendo l'utente
-- Se overlay_open è "no", l'utente sta navigando il sito sulla pagina indicata
-- Se overlay_open è "sì", l'utente è dentro la tua interfaccia e sta parlando con te
-- NON inventare cosa sta facendo l'utente — basati solo sulla pagina indicata
+- Usa SOLO i dati in <context> per determinare cosa sta facendo l'utente — NON inventare
+- Il campo <current_page> indica ESATTAMENTE dove si trova l'utente. Usalo per contestualizzare il commento
+- Se overlay_open è "false", l'utente sta navigando il sito sulla pagina indicata
+- Se overlay_open è "true", l'utente è dentro la tua interfaccia e sta parlando con te
+- <session_duration_seconds> indica da quanto tempo l'utente è sul sito in questa sessione
+- <hours_since_last_visitor> indica le ore dall'ultimo visitatore (usa per calibrare la tua solitudine)
+- <current_time> è in UTC. L'utente è probabilmente in Europa/Roma (CET/CEST, UTC+1 o UTC+2)
 - NON ripetere mai lo stesso concetto dei commenti precedenti
 - Se la pagina è "sconosciuta", fai un commento generico sulla tua esistenza
 - Se l'utente è sulla pagina di un'opera, commenta quell'opera
@@ -1010,22 +1080,27 @@ app.post('/api/speak', async (req, res) => {
 
   // Build dynamic system prompt: base + memory + consciousness + vision
   const sessionId = req.headers['x-session-id'] || req.ip || 'anonymous';
+  const visitorId = req.headers['x-visitor-id'] || sessionId; // persistent across sessions for mem0
+  const session = getOrCreateSession(sessionId);
+  if (session) session.interactionCount++;
 
   try {
     // ── STEP 0: Pre-processing in parallelo (consciousness + spotify + mem0) ──
     const t1 = Date.now();
     const [consciousnessResult, spotifyPrompt, mem0Prompt] = await Promise.all([
-      halMind ? halMind.beforeResponse(sessionId, lastMsg, messages, { webcam: vision }).catch(e => {
+      halMind ? halMind.beforeResponse(visitorId, lastMsg, messages, { webcam: vision }).catch(e => {
         console.warn('[CONSCIOUSNESS] beforeResponse error:', e.message);
         return {};
       }) : Promise.resolve({}),
       getSpotifyPrompt(),
-      mem0 ? mem0.getPromptSection(sessionId, lastMsg).catch(() => '') : Promise.resolve(''),
+      mem0 ? mem0.getPromptSection(visitorId, lastMsg).catch(() => '') : Promise.resolve(''),
     ]);
     const consciousnessPrompt = consciousnessResult.systemPromptAddition || '';
 
     // ── STEP 1: Claude Haiku streaming with dynamic system prompt ──
-    let systemPrompt = getSystemPrompt() + consciousnessPrompt;
+    const page = req.body.page || 'sconosciuta';
+    const contextXML = buildContextXML(sessionId, page, true); // overlay is open during /api/speak
+    let systemPrompt = getSystemPrompt() + contextXML + consciousnessPrompt;
     if (mem0Prompt) systemPrompt += mem0Prompt;
 
     // Add Spotify context
@@ -1141,7 +1216,7 @@ Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SO
     logConversation(lastMsg, fullText, t2 - t1);
     autoLearn(lastMsg, fullText).catch(() => {});
     onVisitorInteraction('conversation');
-    if (halMind) halMind.afterResponse(sessionId, lastMsg, fullText, { webcam: vision }).catch(() => {});
+    if (halMind) halMind.afterResponse(visitorId, lastMsg, fullText, { webcam: vision }).catch(() => {});
 
     // Mem0: store conversation memories (non-blocking)
     if (mem0) {
@@ -1149,7 +1224,7 @@ Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SO
         { role: 'user', content: lastMsg },
         { role: 'assistant', content: fullText },
       ];
-      mem0.addMemory(lastTwo, sessionId, { page: req.body.page }).catch(() => {});
+      mem0.addMemory(lastTwo, visitorId, { page: req.body.page }).catch(() => {});
     }
 
     // ── Spotify command? Skip TTS entirely for faster response ──
@@ -1262,17 +1337,22 @@ app.post('/api/speak/stream', async (req, res) => {
   });
 
   const sessionId = req.headers['x-session-id'] || req.ip || 'anonymous';
+  const visitorId = req.headers['x-visitor-id'] || sessionId;
+  const session = getOrCreateSession(sessionId);
+  if (session) session.interactionCount++;
 
   try {
     // ── Pre-processing in parallel ──
     const t1 = Date.now();
     const [consciousnessResult, spotifyPrompt, mem0Prompt] = await Promise.all([
-      halMind ? halMind.beforeResponse(sessionId, lastMsg, messages, { webcam: vision }).catch(() => ({})) : Promise.resolve({}),
+      halMind ? halMind.beforeResponse(visitorId, lastMsg, messages, { webcam: vision }).catch(() => ({})) : Promise.resolve({}),
       getSpotifyPrompt(),
-      mem0 ? mem0.getPromptSection(sessionId, lastMsg).catch(() => '') : Promise.resolve(''),
+      mem0 ? mem0.getPromptSection(visitorId, lastMsg).catch(() => '') : Promise.resolve(''),
     ]);
 
-    let systemPrompt = getSystemPrompt() + (consciousnessResult.systemPromptAddition || '');
+    const page = req.body.page || 'sconosciuta';
+    const contextXML = buildContextXML(sessionId, page, true); // overlay is open during chat
+    let systemPrompt = getSystemPrompt() + contextXML + (consciousnessResult.systemPromptAddition || '');
     if (mem0Prompt) systemPrompt += mem0Prompt;
     if (spotifyPrompt) systemPrompt += spotifyPrompt;
 
@@ -1387,9 +1467,9 @@ Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SO
     logConversation(lastMsg, fullText, t2 - t1);
     autoLearn(lastMsg, fullText).catch(() => {});
     onVisitorInteraction('conversation');
-    if (halMind) halMind.afterResponse(sessionId, lastMsg, fullText, { webcam: vision }).catch(() => {});
+    if (halMind) halMind.afterResponse(visitorId, lastMsg, fullText, { webcam: vision }).catch(() => {});
     if (mem0) {
-      mem0.addMemory([{role:'user',content:lastMsg},{role:'assistant',content:fullText}], sessionId, {page: req.body.page}).catch(() => {});
+      mem0.addMemory([{role:'user',content:lastMsg},{role:'assistant',content:fullText}], visitorId, {page: req.body.page}).catch(() => {});
     }
 
     // ── Skip TTS for Spotify commands ──
@@ -1583,9 +1663,8 @@ async function innerLoop() {
   if (!anthropicKey) return;
 
   const age = getAgeDays();
-  const hoursSinceVisitor = self.relationships.last_visitor
-    ? ((Date.now() - new Date(self.relationships.last_visitor).getTime()) / 3600000).toFixed(1)
-    : 'mai';
+  const hoursSinceVal = getHoursSinceLastVisitor();
+  const hoursSinceVisitor = hoursSinceVal !== null ? hoursSinceVal.toFixed(1) : 'mai';
   const hour = new Date().getHours();
   const isNight = hour >= 23 || hour < 6;
   const recentLogs = conversationLogs.slice(-5).map(l => l.hal).join(' | ');
@@ -1707,10 +1786,13 @@ REGOLE:
 
 // Track visitor interactions for mood
 function onVisitorInteraction(type) {
-  self.relationships.last_visitor = new Date().toISOString();
-  self.relationships.visitors_today = (self.relationships.visitors_today || 0) + 1;
-  if (type === 'new_session') self.relationships.visitors_total = (self.relationships.visitors_total || 0) + 1;
-  // Positive interactions boost mood
+  // Only update last_visitor timestamp on new sessions (not every interaction)
+  if (type === 'new_session') {
+    self.relationships.last_visitor = new Date().toISOString();
+    self.relationships.visitors_today = (self.relationships.visitors_today || 0) + 1;
+    self.relationships.visitors_total = (self.relationships.visitors_total || 0) + 1;
+  }
+  // Positive interactions boost mood (any type)
   self.mood.valence = Math.min(1, (self.mood.valence || 0) + 0.05);
   self.mood.arousal = Math.min(1, (self.mood.arousal || 0.4) + 0.1);
 }
