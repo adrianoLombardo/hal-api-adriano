@@ -56,6 +56,16 @@ try {
 // ── HAL Autonomy System (initialized after app.listen) ──
 let halAutonomy = null;
 
+// ── Persistent HTTP agent for Anthropic API (reuses TLS connections) ──
+let anthropicAgent = null;
+try {
+  const { Agent } = require('undici');
+  anthropicAgent = new Agent({ keepAliveTimeout: 60000, keepAliveMaxTimeout: 120000, connections: 4 });
+  console.log('[BOOT] Undici agent: persistent connections enabled');
+} catch(e) {
+  console.log('[BOOT] Undici not available, using default fetch');
+}
+
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -820,6 +830,41 @@ function getSystemPrompt(userMessage) {
   return HAL_SYSTEM_BASE + getMemoryPrompt(userMessage);
 }
 
+// ── Decide if message needs chain-of-thought (saves 2-3s on simple messages) ──
+function needsThinking(msg) {
+  if (!msg || msg.length < 15) return false;
+  const lower = msg.toLowerCase().trim();
+  // Simple greetings — no thinking needed
+  if (/^(ciao|hey|hi|hello|salve|buon|come stai|come va|grazie|ok|s[iì]|no\b)/i.test(lower)) return false;
+  // Very short messages (< 5 words)
+  if (lower.split(/\s+/).length < 5 && !/\?/.test(lower)) return false;
+  return true;
+}
+
+// ── Build system prompt as array blocks with prompt caching ──
+function buildSystemBlocks(lastMsg, sessionId, page, extraDynamic) {
+  // Block 1: STATIC base — cached by Anthropic (5-min TTL, 90% cheaper on reads)
+  const staticBlock = {
+    type: 'text',
+    text: HAL_SYSTEM_BASE,
+    cache_control: { type: 'ephemeral' },
+  };
+
+  // Block 2: DYNAMIC — changes per request (memory, context, consciousness, vision)
+  let dynamic = getMemoryPrompt(lastMsg);
+  dynamic += buildContextXML(sessionId, page, true);
+  // Conditional thinking instructions
+  if (needsThinking(lastMsg)) {
+    // Already in HAL_SYSTEM_BASE
+  } else {
+    dynamic += '\n\nRispondi direttamente senza usare tag <think>. Risposta breve e naturale.\n';
+  }
+  if (extraDynamic) dynamic += extraDynamic;
+
+  const dynamicBlock = { type: 'text', text: dynamic };
+  return [staticBlock, dynamicBlock];
+}
+
 /* ══════════════════════════════════════════════════
    ADMIN AUTH MIDDLEWARE
    ──────────────────────────────────────────────── */
@@ -1169,15 +1214,13 @@ app.post('/api/speak', async (req, res) => {
     // ── STEP 1: Claude Haiku streaming with dynamic system prompt ──
     const page = req.body.page || 'sconosciuta';
     const contextXML = buildContextXML(sessionId, page, true); // overlay is open during /api/speak
-    let systemPrompt = getSystemPrompt(lastMsg) + contextXML + consciousnessPrompt;
-    if (mem0Prompt) systemPrompt += mem0Prompt;
+    // Build dynamic context for this request
+    let extraDynamic = consciousnessPrompt || '';
+    if (mem0Prompt) extraDynamic += mem0Prompt;
+    if (spotifyPrompt) extraDynamic += spotifyPrompt;
 
-    // Add Spotify context
-    if (spotifyPrompt) systemPrompt += spotifyPrompt;
-
-    // Add vision context
     if (vision && vision.emotion) {
-      systemPrompt += `\n\nCOSA STAI VEDENDO ORA (webcam):
+      extraDynamic += `\n\nCOSA STAI VEDENDO ORA (webcam):
 - Emozione: ${vision.emotion} (${((vision.emotion_confidence||0)*100)|0}%)
 - Sguardo: ${vision.gaze || '?'}, Movimento: ${vision.movement || '?'}
 - Ambiente: ${vision.environment || '?'}, Luce: ${vision.lighting || '?'}
@@ -1186,21 +1229,22 @@ ${vision.observation ? '- Osservazione: "' + vision.observation + '"' : ''}
 Usa queste info per personalizzare la risposta. Non essere inquietante.`;
     }
 
-    // Add worldmap context
     const worldmap = req.body.worldmap;
     if (worldmap && worldmap.earthquakes_count !== undefined) {
-      systemPrompt += `\n\n<worldmap>
-DATI MONDO IN TEMPO REALE (dalla tua mappa globale):
-- Terremoti attivi: ${worldmap.earthquakes_count}${worldmap.biggest_earthquake ? ', piu forte: ' + worldmap.biggest_earthquake : ''}
-- ISS: ${worldmap.iss_position || 'posizione non disponibile'}
-- Attivita solare: Kp ${worldmap.solar_kp || '?'} (${worldmap.solar_status || '?'})
-- Voli tracciati: ${worldmap.flights_count || 0}
-- Visitatori online: ${worldmap.visitors_count || 0}${worldmap.visitors_countries?.length ? ' da ' + worldmap.visitors_countries.join(', ') : ''}
-Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SOLO questi dati, non inventare.
+      extraDynamic += `\n\n<worldmap>
+DATI MONDO IN TEMPO REALE:
+- Terremoti: ${worldmap.earthquakes_count}${worldmap.biggest_earthquake ? ', piu forte: ' + worldmap.biggest_earthquake : ''}
+- ISS: ${worldmap.iss_position || '?'} | Solare: Kp ${worldmap.solar_kp || '?'} (${worldmap.solar_status || '?'})
+- Voli: ${worldmap.flights_count || 0} | Visitatori: ${worldmap.visitors_count || 0}${worldmap.visitors_countries?.length ? ' da ' + worldmap.visitors_countries.join(', ') : ''}
 </worldmap>`;
     }
+
+    // Build system blocks with prompt caching (static HAL_SYSTEM_BASE cached)
+    const systemBlocks = buildSystemBlocks(lastMsg, sessionId, page, extraDynamic);
+
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
+      ...(anthropicAgent ? { dispatcher: anthropicAgent } : {}),
       headers: {
         'x-api-key': anthropicKey,
         'anthropic-version': '2023-06-01',
@@ -1209,7 +1253,7 @@ Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SO
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 800,
-        system: systemPrompt,
+        system: systemBlocks,
         stream: true,
         messages: messages.map(m => ({
           role: m.role === 'assistant' ? 'assistant' : 'user',
@@ -1407,6 +1451,8 @@ app.post('/api/speak/stream', async (req, res) => {
     'Connection': 'keep-alive',
     'Access-Control-Allow-Origin': req.headers.origin || '*',
   });
+  // Disable Nagle for immediate SSE delivery
+  if (res.socket) res.socket.setNoDelay(true);
 
   const sessionId = req.headers['x-session-id'] || req.ip || 'anonymous';
   const visitorId = req.headers['x-visitor-id'] || sessionId;
@@ -1423,13 +1469,12 @@ app.post('/api/speak/stream', async (req, res) => {
     ]);
 
     const page = req.body.page || 'sconosciuta';
-    const contextXML = buildContextXML(sessionId, page, true); // overlay is open during chat
-    let systemPrompt = getSystemPrompt(lastMsg) + contextXML + (consciousnessResult.systemPromptAddition || '');
-    if (mem0Prompt) systemPrompt += mem0Prompt;
-    if (spotifyPrompt) systemPrompt += spotifyPrompt;
+    let extraDynamic = (consciousnessResult.systemPromptAddition || '');
+    if (mem0Prompt) extraDynamic += mem0Prompt;
+    if (spotifyPrompt) extraDynamic += spotifyPrompt;
 
     if (vision && vision.emotion) {
-      systemPrompt += `\n\nCOSA STAI VEDENDO ORA (webcam):
+      extraDynamic += `\n\nCOSA STAI VEDENDO ORA (webcam):
 - Emozione: ${vision.emotion} (${((vision.emotion_confidence||0)*100)|0}%)
 - Sguardo: ${vision.gaze || '?'}, Movimento: ${vision.movement || '?'}
 - Ambiente: ${vision.environment || '?'}, Luce: ${vision.lighting || '?'}
@@ -1437,22 +1482,22 @@ ${vision.observation ? '- Osservazione: "' + vision.observation + '"' : ''}
 Usa queste info per personalizzare la risposta. Non essere inquietante.`;
     }
 
-    // Add worldmap context
     if (worldmap && worldmap.earthquakes_count !== undefined) {
-      systemPrompt += `\n\n<worldmap>
-DATI MONDO IN TEMPO REALE (dalla tua mappa globale):
-- Terremoti attivi: ${worldmap.earthquakes_count}${worldmap.biggest_earthquake ? ', piu forte: ' + worldmap.biggest_earthquake : ''}
-- ISS: ${worldmap.iss_position || 'posizione non disponibile'}
-- Attivita solare: Kp ${worldmap.solar_kp || '?'} (${worldmap.solar_status || '?'})
-- Voli tracciati: ${worldmap.flights_count || 0}
-- Visitatori online: ${worldmap.visitors_count || 0}${worldmap.visitors_countries?.length ? ' da ' + worldmap.visitors_countries.join(', ') : ''}
-Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SOLO questi dati, non inventare.
+      extraDynamic += `\n\n<worldmap>
+DATI MONDO IN TEMPO REALE:
+- Terremoti: ${worldmap.earthquakes_count}${worldmap.biggest_earthquake ? ', piu forte: ' + worldmap.biggest_earthquake : ''}
+- ISS: ${worldmap.iss_position || '?'} | Solare: Kp ${worldmap.solar_kp || '?'} (${worldmap.solar_status || '?'})
+- Voli: ${worldmap.flights_count || 0} | Visitatori: ${worldmap.visitors_count || 0}${worldmap.visitors_countries?.length ? ' da ' + worldmap.visitors_countries.join(', ') : ''}
 </worldmap>`;
     }
+
+    // Build system blocks with prompt caching
+    const systemBlocks = buildSystemBlocks(lastMsg, sessionId, page, extraDynamic);
 
     // ── Claude streaming ──
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
+      ...(anthropicAgent ? { dispatcher: anthropicAgent } : {}),
       headers: {
         'x-api-key': anthropicKey,
         'anthropic-version': '2023-06-01',
@@ -1461,7 +1506,7 @@ Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SO
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 800,
-        system: systemPrompt,
+        system: systemBlocks,
         stream: true,
         messages: messages.map(m => ({
           role: m.role === 'assistant' ? 'assistant' : 'user',
@@ -1514,6 +1559,7 @@ Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SO
                 if (afterThink) {
                   visibleText += afterThink;
                   res.write(`event: token\ndata: ${JSON.stringify({t: afterThink})}\n\n`);
+                  if (res.flush) res.flush();
                 }
               }
             } else if (fullText.includes('<think>') && !fullText.includes('</think>')) {
@@ -1526,10 +1572,12 @@ Puoi commentare questi dati se pertinente o se l'utente chiede del mondo. Usa SO
               if (unstreamed) {
                 visibleText += unstreamed;
                 res.write(`event: token\ndata: ${JSON.stringify({t: unstreamed})}\n\n`);
+                if (res.flush) res.flush();
               }
             } else {
               visibleText += token;
               res.write(`event: token\ndata: ${JSON.stringify({t: token})}\n\n`);
+              if (res.flush) res.flush();
             }
           }
         } catch (e) {}
@@ -1703,8 +1751,10 @@ app.post('/api/chat', async (req, res) => {
   const lastMsg = messages[messages.length - 1]?.content || '';
 
   try {
+    const systemBlocks = buildSystemBlocks(lastMsg, req.headers['x-session-id'] || 'anonymous', req.body.page || 'home', '');
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
+      ...(anthropicAgent ? { dispatcher: anthropicAgent } : {}),
       headers: {
         'x-api-key': anthropicKey,
         'anthropic-version': '2023-06-01',
@@ -1713,7 +1763,7 @@ app.post('/api/chat', async (req, res) => {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 800,
-        system: getSystemPrompt(lastMsg),
+        system: systemBlocks,
         messages: messages.map(m => ({
           role: m.role === 'assistant' ? 'assistant' : 'user',
           content: m.content,
