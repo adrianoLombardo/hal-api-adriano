@@ -73,6 +73,8 @@ function todayIso() { const r = romeParts(Date.now()); return `${r.y}-${String(r
 const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const pre = (s) => `<pre>${esc(s)}</pre>`;           // blocco con copia in un tocco sui client mobili
 const igFull = (it) => `${it.instagram}\n\n${it.hashtags.join(' ')}`;
+/** secondo del fotogramma consigliato per la copertina: "0,3 s, silhouette…" → "0,3 s" (la virgola è decimale) */
+const coverTime = (it) => { const m = /^\s*([\d]+(?:[.,]\d+)?\s*s)/.exec(it.coverNote || ''); return m ? m[1] : ''; };
 const sendHour = () => Math.min(23, Math.max(0, Number(env('SOCIAL_HOUR', '18')) || 18));
 const sendAtMs = (it) => it.date ? atRome(it.date, sendHour(), 0) : null;
 const slotMs = (it) => it.date ? atRome(it.date, 18, 30) : null;
@@ -94,7 +96,7 @@ async function sendPackage(it, chatId, { manual = false } = {}) {
   busy = true;
   try {
     const when = it.date ? `${dateIt(it.date)} alle ${it.time}` : 'quando vuoi';
-    const head = `🎬 <b>Reel ${it.reel} · ${esc(it.title)}</b>\nInstagram ${esc(when)} · TikTok alle ${esc(it.tiktokTime)}${it.coverNote ? `\n🖼 Copertina: fotogramma a ${esc(it.coverNote.split(',')[0])}` : ''}`;
+    const head = `🎬 <b>Reel ${it.reel} · ${esc(it.title)}</b>\nInstagram ${esc(when)} · TikTok alle ${esc(it.tiktokTime)}${coverTime(it) ? `\n🖼 Copertina: fotogramma a ${esc(coverTime(it))}` : ''}`;
     try {
       await bot.tg('sendVideo', { chat_id: to, video: it.video, caption: head, parse_mode: 'HTML', supports_streaming: true, width: 1080, height: 1920 });
     } catch (e) {
