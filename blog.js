@@ -140,19 +140,31 @@ function splitMessage(text, max = 3800) {
 /* ══════════════════════════════════════════════════
    1. TESTO — prompt e parsing
    ──────────────────────────────────────────────── */
-function systemPrompt() {
+const FORMATS = {
+  guida: { label: 'guida pratica', rules: `FORMATO: GUIDA PRATICA. Intro di 2-3 paragrafi che entra subito nel merito, poi 4-7 sezioni con <h2> (eventuali <h3>), liste solo dove servono davvero, una <blockquote> con una frase forte tua verso la fine, chiusura pratica di 1-2 paragrafi (senza titolo "Conclusione"). Lunghezza 900-1300 parole.`, cta: { text: 'Hai un progetto, uno spazio o un evento in mente? Un brief di dieci minuti basta per una prima fascia di costo e di tempi.', label: 'Richiedi una stima' } },
+  opera: { label: "racconto di un'opera", rules: `FORMATO: RACCONTO DI UN'OPERA. In prima persona: da dove nasce, cosa volevo che le persone sentissero, com'è fatta (materiali, luce, tecnologia, gesti del pubblico) senza cifre o date non fornite, cosa è successo con le persone, cosa ho capito dopo e cosa porto nella prossima opera. 3-5 sezioni con <h2> dai titoli brevi ed evocativi, pochissime liste, una <blockquote>. Tono caldo e concreto, immagini precise, niente gergo tecnico non necessario. Lunghezza 800-1100 parole.`, cta: { text: "Vuoi vedere le opere dal vivo, invitarle in uno spazio o parlarne per un progetto? Scrivimi.", label: 'Scrivimi' } },
+  riflessione: { label: 'riflessione artistica', rules: `FORMATO: RIFLESSIONE. Saggio breve in prima persona su arte, luce, percezione, corpo, tempo: pensiero personale con esempi concreti dalle opere elencate, mai astratto per più di due frasi di fila. 3-5 sezioni con <h2> dai titoli brevi (anche una sola parola), niente elenchi puntati se non indispensabili, una <blockquote> con una frase tua. Nessuna promessa commerciale, nessun consiglio da manuale. Lunghezza 800-1100 parole.`, cta: { text: 'Se queste riflessioni ti parlano, scrivimi: per una mostra, una conversazione o una collaborazione.', label: 'Scrivimi' } },
+  ricerca: { label: 'diario di ricerca', rules: `FORMATO: DIARIO DI RICERCA (Neuro.Flow e affini). La domanda di partenza, cosa ho provato (setup, persone, condizioni, in modo descrittivo), cosa ho osservato SENZA inventare numeri, percentuali o risultati scientifici, cosa non ha funzionato, cosa resta aperto e con chi vorrei lavorare. Tono onesto e curioso, 4-5 sezioni con <h2>, una <blockquote>. Distingui sempre ciò che è osservazione da ciò che è ipotesi. Lunghezza 800-1100 parole.`, cta: { text: 'Neuro.Flow è una ricerca aperta: se sei un laboratorio, un festival o un ricercatore, scrivimi.', label: 'Scrivimi' } },
+  percorso: { label: 'racconto del percorso', rules: `FORMATO: PERCORSO PERSONALE. Racconto in prima persona di una parte del mio percorso: svolte, convinzioni, errori, scelte. USA SOLO i fatti biografici elencati sotto; non aggiungere date, età, scuole, premi, città, maestri o nomi non elencati; se serve un dettaglio che non hai, resta generico. 3-5 sezioni con <h2>, una <blockquote>, poche liste. Lunghezza 800-1100 parole.`, cta: { text: 'Vuoi parlare del mio lavoro per una mostra, una collaborazione o un progetto? Scrivimi.', label: 'Scrivimi' } },
+};
+const formatOf = (f) => FORMATS[f] ? f : 'guida';
+const BIO = `Fatti biografici utilizzabili (SOLO questi): nato a Segrate, vicino a Milano, nel 1990; laureato in Scultura all'Accademia di Belle Arti di Brera con specializzazione in Arti Visive e installazioni interattive; vive e lavora a Milano; fa parte del collettivo Holy Club; ha esposto alla Biennale di Firenze, al Museo della Permanente di Milano, ad Art Dubai, alla Fabbrica del Vapore, al Bright Festival e al FRAC Museum di Baronissi; la sua ricerca esplora le connessioni invisibili tra essere umano, universo e tecnologia; riferimenti dichiarati: James Turrell, Olafur Eliasson, Anish Kapoor, Yayoi Kusama, Chiharu Shiota, Gianni Colombo.`;
+
+function systemPrompt(format = 'guida') {
   const t = topics();
+  const F = FORMATS[formatOf(format)];
   const existing = (t.existing || []).map(e => `- ${e.title} → ${SITE}${e.url}`).join('\n');
-  return `Sei Adriano Lombardo e scrivi un articolo per il blog del tuo sito ${SITE}/blog.
+  return `Sei Adriano Lombardo e scrivi un articolo (${F.label}) per il blog del tuo sito ${SITE}/blog.
 Chi sei: Creative Technologist e light designer, Milano. Progetti installazioni immersive e interattive, projection mapping, light design, arte generativa e opere che usano segnali EEG (onde cerebrali). Strumenti che usi davvero: TouchDesigner, NotchVFX, GrandMA3, Resolume, Three.js, sensori (LIDAR, telecamere di profondità), headset EEG consumer a pochi elettrodi.
+${BIO}
 Opere che puoi citare (solo queste, senza inventare dettagli): Neuro.Flow (ricerca aperta sulla sincronia cerebrale tra due persone: due headset EEG, Phase Locking Value, sfera proiettata e luce che reagiscono); Animus et Corpus (Bright Festival 2025, EEG → luce e proiezione); Interconnection (installazione immersiva di 600 m², Holy Club Gallery); The Cathedral (architettura di fili fluorescenti e luce UV); San Salvador (murales con fili fluorescenti e luce UV); Liquid Thoughts (grafica generativa, il pubblico partecipa dal telefono con un QR); Sailing Through Memories (partecipazione via web, memorie proiettate); Gods of the Digital Age (Opificio Innova); padiglione Dubai Municipality (proiezioni). Collaborazioni: Holy Club (holyclub.it), Sublime Tecnologico.
 
 REGOLE FERREE
 - Prima persona singolare, italiano naturale, tono diretto e concreto, da professionista che monta le installazioni, non da agenzia. Frasi brevi. Niente retorica, niente "in questo articolo", niente riassunti finali del tipo "in conclusione".
 - NESSUN numero inventato: niente conteggi di installazioni, paesi, clienti, visitatori, premi, anni di esperienza, fatturato. Niente nomi di clienti o luoghi oltre a quelli elencati. Se serve un ordine di grandezza (costi, tempi, lumen, latenza) usa fasce ampie e chiaramente indicative.
 - Niente promesse assolute, niente superlativi da marketing, niente emoji.
-- Struttura: intro di 2-3 paragrafi che entra subito nel merito, poi 4-7 sezioni con <h2> (eventuali <h3>), liste solo dove servono davvero, una <blockquote> con una frase forte tua verso la fine, chiusura pratica di 1-2 paragrafi (senza titolo "Conclusione").
-- Lunghezza: 900-1300 parole. HTML consentito nel corpo: <p> <h2> <h3> <ul> <ol> <li> <strong> <em> <a> <blockquote>. Nessun <h1>, nessuna immagine, nessun <div>.
+- ${F.rules}
+- HTML consentito nel corpo: <p> <h2> <h3> <ul> <ol> <li> <strong> <em> <a> <blockquote>. Nessun <h1>, nessuna immagine, nessun <div>.
 - Link interni consentiti (usane 2-3, solo se pertinenti, con testo ancora naturale): ${SITE}/contact.html, ${SITE}/works.html, ${SITE}/case-studies.html, ${SITE}/neuro-flow.html, ${SITE}/brands.html e gli articoli già pubblicati qui sotto. Nessun altro link.
 - Il titolo (H1) è chiaro e specifico, 55-90 caratteri, senza clickbait, senza due punti doppi.
 - Ortografia italiana curata anche nei titoli e nei campi brevi: apostrofi ed elisioni corretti (un'installazione, l'evento, dell'opera, quest'anno), accenti corretti (è, perché, più).
@@ -224,12 +236,13 @@ function articleFromSections(sec, topic) {
     body: cleanBody,
     words,
     minutes: readingMinutes(cleanBody),
+    format: formatOf(topic.format),
   };
 }
 
 async function writeArticle(topic, { feedback = [], previous = null } = {}) {
   if (MOCK) return mockArticle(topic);
-  let user = `ARGOMENTO: ${topic.title}\nTAGLIO: ${topic.angle}\nPAROLE CHIAVE SEO: ${topic.keywords}\nTAG SUGGERITI: ${topic.tags.join(', ')}\nDATA: ${dateIt(todayIso())}`;
+  let user = `ARGOMENTO: ${topic.title}\nFORMATO: ${FORMATS[formatOf(topic.format)].label}\nTAGLIO: ${topic.angle}\nPAROLE CHIAVE SEO: ${topic.keywords}\nTAG SUGGERITI: ${topic.tags.join(', ')}\nDATA: ${dateIt(todayIso())}`;
   if (previous && feedback.length) {
     user += `\n\nQuesta è la versione precedente dell'articolo:\n###TITLE\n${previous.title}\n###BODY\n${previous.body}\n###END\n\nRISCRIVILO applicando queste correzioni di Adriano (hanno la priorità su tutto):\n${feedback.map((f, i) => `${i + 1}. ${f}`).join('\n')}\nMantieni ciò che non è toccato dalle correzioni. Rispondi con il formato completo delle sezioni.`;
   } else if (feedback.length) {
@@ -240,7 +253,7 @@ async function writeArticle(topic, { feedback = [], previous = null } = {}) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     if (attempt > 1) await new Promise(r => setTimeout(r, 20000 * (attempt - 1)));
     try {
-      const r = await llm.complete({ system: systemPrompt(), messages: [{ role: 'user', content: user }], maxTokens: 7000, timeoutMs: 240000, json: true });
+      const r = await llm.complete({ system: systemPrompt(topic.format), messages: [{ role: 'user', content: user }], maxTokens: 7000, timeoutMs: 240000, json: true });
       const text = String(r.text || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       const art = articleFromSections(parseSections(text), topic);
       art.model = `${r.provider}/${r.model}`;
@@ -260,7 +273,7 @@ function mockArticle(topic) {
 <h2>Terza sezione</h2><p>${'Ultimo blocco di testo di prova per raggiungere una lunghezza credibile. '.repeat(12)}</p>
 <blockquote>Una frase forte, ma di prova.</blockquote>
 <p>Per una stima concreta scrivimi dalla <a href="${SITE}/contact.html">pagina contatti</a>.</p>`);
-  return { title: `${topic.title} (prova)`, metaTitle: topic.title.slice(0, 60), metaDescription: `Articolo di prova sul tema: ${topic.title}.`.slice(0, 160), excerpt: `Articolo di prova sul tema ${topic.title}.`, slug: slugify('prova-' + topic.id + '-' + Date.now().toString(36)), keywords: topic.keywords, tags: topic.tags, imagePrompt: 'test', imageAlt: topic.fallbackAlt, body, words: wordCount(body), minutes: readingMinutes(body), model: 'mock' };
+  return { title: `${topic.title} (prova)`, metaTitle: topic.title.slice(0, 60), metaDescription: `Articolo di prova sul tema: ${topic.title}.`.slice(0, 160), excerpt: `Articolo di prova sul tema ${topic.title}.`, slug: slugify('prova-' + topic.id + '-' + Date.now().toString(36)), keywords: topic.keywords, tags: topic.tags, imagePrompt: 'test', imageAlt: topic.fallbackAlt, body, words: wordCount(body), minutes: readingMinutes(body), format: formatOf(topic.format), model: 'mock' };
 }
 
 /* ══════════════════════════════════════════════════
@@ -531,8 +544,8 @@ ${a.body}
   </div>
 
   <div class="article-cta">
-    <p>Hai un progetto, uno spazio o un evento in mente? Un brief di dieci minuti basta per una prima fascia di costo e di tempi.</p>
-    <a href="/contact.html" class="sn-cta">Richiedi una stima</a>
+    <p>${esc(FORMATS[formatOf(a.format)].cta.text)}</p>
+    <a href="/contact.html" class="sn-cta">${esc(FORMATS[formatOf(a.format)].cta.label)}</a>
   </div>
 </article>
 </main>
@@ -556,6 +569,16 @@ function renderCard(a, img, date) {
       <span class="sn-link more">Leggi →</span>
     </div>
   </a>`;
+}
+function feedEntry(a, img, date) {
+  return { slug: a.slug, url: `/blog/${a.slug}.html`, title: a.title, excerpt: a.excerpt, date, dateLabel: dateIt(date), minutes: a.minutes, tags: a.tags, image: { src: img.src, srcset: img.srcset || '', alt: img.alt || '' } };
+}
+function updateFeed(jsonText, entry, date) {
+  let feed = { updated: date, posts: [] };
+  try { const j = JSON.parse(jsonText || ''); if (j && Array.isArray(j.posts)) feed = j; } catch (e) {}
+  feed.posts = [entry].concat((feed.posts || []).filter(p => p && p.slug !== entry.slug));
+  feed.updated = date;
+  return JSON.stringify(feed, null, 2) + '\n';
 }
 function insertCard(indexHtml, card, slug) {
   if (indexHtml.includes(`href="/blog/${slug}.html"`)) return indexHtml;
@@ -631,6 +654,8 @@ async function publish(draft) {
     fs.writeFileSync(path.join(outDir, 'blog', 'index.html'), insertCard(idx, card, a.slug));
     const sm = fs.readFileSync(path.join(siteDir, 'sitemap.xml'), 'utf8');
     fs.writeFileSync(path.join(outDir, 'sitemap.xml'), updateSitemap(sm, url, date));
+    let feedText = ''; try { feedText = fs.readFileSync(path.join(siteDir, 'blog', 'posts.json'), 'utf8'); } catch (e) {}
+    fs.writeFileSync(path.join(outDir, 'blog', 'posts.json'), updateFeed(feedText, feedEntry(a, img, date), date));
     log('DRY RUN: file scritti in', outDir);
   } else {
     await withFtp(async (client) => {
@@ -642,6 +667,9 @@ async function publish(draft) {
       await ftpUploadText(client, `${root}/blog/index.html`, insertCard(idx, card, a.slug)); log('aggiornato blog/index.html');
       const sm = await ftpDownloadText(client, `${root}/sitemap.xml`);
       await ftpUploadText(client, `${root}/sitemap.xml`, updateSitemap(sm, url, date)); log('aggiornato sitemap.xml');
+      let feedText = '';
+      try { feedText = await ftpDownloadText(client, `${root}/blog/posts.json`); } catch (e) { warn('blog/posts.json non trovato sul server, lo creo'); }
+      await ftpUploadText(client, `${root}/blog/posts.json`, updateFeed(feedText, feedEntry(a, img, date), date)); log('aggiornato blog/posts.json (feed della SPA)');
     });
     await indexNow([url, `${SITE}/blog/`]);
   }
@@ -692,7 +720,7 @@ function keyboard(draft) {
 async function sendDraft(draft, { onlyImage = false } = {}) {
   const a = draft.article, img = draft.image;
   const previewUrl = publicUrl ? `${publicUrl}/api/blog/preview/${draft.id}` : '';
-  const caption = `📝 <b>Articolo proposto per il blog</b>\n\n<b>${esc(a.title)}</b>\n${esc(a.excerpt)}\n\n⏱ ${a.minutes} min · ${a.words} parole · 🏷 ${esc(a.tags.join(', '))}\n🖼 Copertina: ${esc(img.kind === 'gemini' ? 'generata con ' + img.model : 'foto del sito (' + img.src + ')')}\n🤖 Testo: ${esc(a.model || '-')}${previewUrl ? `\n\n🔗 <a href="${previewUrl}">Anteprima con lo stile del sito</a>` : ''}`;
+  const caption = `📝 <b>Articolo proposto per il blog</b>\n\n<b>${esc(a.title)}</b>\n${esc(a.excerpt)}\n\n✍️ ${esc(FORMATS[formatOf(a.format)].label)} · ⏱ ${a.minutes} min · ${a.words} parole · 🏷 ${esc(a.tags.join(', '))}\n🖼 Copertina: ${esc(img.kind === 'gemini' ? 'generata con ' + img.model : 'foto del sito (' + img.src + ')')}\n🤖 Testo: ${esc(a.model || '-')}${previewUrl ? `\n\n🔗 <a href="${previewUrl}">Anteprima con lo stile del sito</a>` : ''}`;
   let m;
   if (img.preview && fs.existsSync(img.preview)) m = await tg('sendPhoto', { chat_id: owner(), caption, parse_mode: 'HTML' }, { photo: { path: img.preview, type: 'image/jpeg', name: 'cover.jpg' } });
   else m = await tg('sendPhoto', { chat_id: owner(), photo: SITE + img.src, caption, parse_mode: 'HTML' }).catch(() => send(owner(), caption));
@@ -712,6 +740,16 @@ function pickTopic(topicId) {
   const inDrafts = new Set(Object.values(state.drafts).filter(d => d.status === 'pending').map(d => d.topicId));
   const free = all.filter(t => !state.usedTopics.includes(t.id) && !inDrafts.has(t.id));
   if (!free.length) throw new Error('argomenti esauriti: aggiungine a blog-topics.json');
+  // alterna i formati: guida → opera → riflessione → ricerca → percorso → guida …
+  const cycle = ['guida', 'opera', 'riflessione', 'ricerca', 'percorso'];
+  const lastId = state.usedTopics[state.usedTopics.length - 1];
+  const last = all.find(t => t.id === lastId);
+  const start = last ? (cycle.indexOf(formatOf(last.format)) + 1) % cycle.length : 0;
+  for (let i = 0; i < cycle.length; i++) {
+    const f = cycle[(start + i) % cycle.length];
+    const hit = free.find(t => formatOf(t.format) === f);
+    if (hit) return hit;
+  }
   return free[0];
 }
 
@@ -809,7 +847,7 @@ async function onMessage(msg) {
       case 'stato': case 'status': return send(chatId, esc(statusText()));
       case 'argomenti': case 'topics': {
         const all = topics().topics;
-        const lines = all.map(t => `${state.usedTopics.includes(t.id) ? '✔' : '•'} ${t.id} — ${t.title}`);
+        const lines = all.map(t => `${state.usedTopics.includes(t.id) ? '✔' : '•'} [${formatOf(t.format)}] ${t.id} — ${t.title}`);
         return send(chatId, `<b>Argomenti</b> (✔ = già usato)\n\n${esc(lines.join('\n'))}\n\nPer sceglierne uno: /nuovo id-argomento`);
       }
       case 'salta': case 'skip':
@@ -1001,4 +1039,4 @@ function init({ app, dataDir, adminAuth, publicUrl: pu }) {
   log(`pronto: ogni ${INTERVAL_DAYS} giorni alle ${SEND_HOUR}:00 ${TZ} · Telegram ${TOKEN() ? 'ok' : 'NO'} · FTP ${ftpConfigured() ? 'ok' : 'NO'} · immagini ${env('GEMINI_API_KEY') ? 'Gemini' : 'foto del sito'}${MOCK ? ' · MOCK' : ''}${DRY_RUN ? ' · DRY RUN' : ''}`);
 }
 
-module.exports = { init, statusText, createDraft, publish, renderArticle, renderCard, insertCard, updateSitemap, htmlToTelegram, parseSections, sanitizeBody, makeCover, buildImageSet, _state: () => state };
+module.exports = { init, statusText, createDraft, publish, renderArticle, renderCard, insertCard, updateSitemap, updateFeed, feedEntry, htmlToTelegram, parseSections, sanitizeBody, makeCover, buildImageSet, _state: () => state };

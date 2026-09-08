@@ -1,5 +1,5 @@
 {
-  "note": "Argomenti a rotazione per il blog automatico. Il server segna quelli usati in blog-state.json. Ogni voce: titolo di lavoro, angolo, tag, parole chiave SEO, copertina di riserva (immagine del sito) se Gemini non genera l'immagine.",
+  "note": "Argomenti a rotazione per il blog automatico. `format`: guida (pratico), opera (racconto di un'opera), riflessione (saggio artistico), ricerca (diario Neuro.Flow), percorso (storia personale). Il server alterna i formati e segna gli usati in blog-state.json. Ogni voce: titolo di lavoro, angolo, tag, parole chiave SEO, copertina di riserva (immagine del sito con varianti -480/-1024/-og) se i generatori non producono l'immagine.",
   "topics": [
     { "id": "brief-installazione",
       "title": "Come scrivere il brief per un'installazione immersiva: le 12 informazioni che fanno risparmiare settimane",
@@ -11,7 +11,8 @@
       ],
       "keywords": "brief installazione immersiva, come commissionare installazione interattiva, agenzia eventi installazione",
       "fallback": "/img/interconnection/1.jpg",
-      "fallbackAlt": "Interconnection, installazione immersiva audio video luce"
+      "fallbackAlt": "Interconnection, installazione immersiva audio video luce",
+      "format": "guida"
     },
     { "id": "touchdesigner-vs-notch",
       "title": "TouchDesigner o Notch? Quando uso l'uno e quando l'altro nelle installazioni dal vivo",
@@ -24,7 +25,8 @@
       "keywords": "touchdesigner vs notch, software installazioni interattive, real time graphics live",
       "fallback": "/img/hc/copertina.jpg",
       "fallbackOg": "/img/hc/copertina.jpg",
-      "fallbackAlt": "Regia in tempo reale per installazione interattiva"
+      "fallbackAlt": "Regia in tempo reale per installazione interattiva",
+      "format": "guida"
     },
     { "id": "sensori-interazione",
       "title": "LIDAR, telecamere di profondità o EEG: quale sensore per quale installazione",
@@ -36,7 +38,8 @@
       ],
       "keywords": "sensori installazione interattiva, telecamera di profondità arte, lidar installazione",
       "fallback": "/img/liquid/cover.jpg",
-      "fallbackAlt": "Liquid Thoughts, installazione interattiva con telecamera di profondità"
+      "fallbackAlt": "Liquid Thoughts, installazione interattiva con telecamera di profondità",
+      "format": "guida"
     },
     { "id": "spazio-buio",
       "title": "Perché uno spazio buio vale più di un proiettore in più: preparare la location per un'installazione",
@@ -48,7 +51,8 @@
       ],
       "keywords": "location installazione immersiva, oscuramento sala evento, preparare spazio projection mapping",
       "fallback": "/img/cathedral/1.jpg",
-      "fallbackAlt": "The Cathedral, fili e luce UV in uno spazio buio"
+      "fallbackAlt": "The Cathedral, fili e luce UV in uno spazio buio",
+      "format": "guida"
     },
     { "id": "eeg-cosa-misura",
       "title": "Cosa misura davvero un headset EEG da 4 elettrodi, e cosa no",
@@ -60,7 +64,8 @@
       ],
       "keywords": "headset eeg muse cosa misura, eeg arte, onde cerebrali installazione",
       "fallback": "/img/animus/cover.jpg",
-      "fallbackAlt": "Animus et Corpus, installazione EEG al Bright Festival"
+      "fallbackAlt": "Animus et Corpus, installazione EEG al Bright Festival",
+      "format": "ricerca"
     },
     { "id": "sincronia-due-cervelli",
       "title": "Due cervelli si sincronizzano davvero? Il Phase Locking Value spiegato senza formule",
@@ -72,7 +77,8 @@
       ],
       "keywords": "phase locking value spiegato, sincronia cerebrale, hyperscanning arte",
       "fallback": "/img/animus/cover.jpg",
-      "fallbackAlt": "Neuro.Flow, due partecipanti con headset EEG e sfera proiettata"
+      "fallbackAlt": "Neuro.Flow, due partecipanti con headset EEG e sfera proiettata",
+      "format": "ricerca"
     },
     { "id": "mapping-architetturale",
       "title": "Projection mapping su un edificio: le 7 cose da controllare prima di dire sì",
@@ -84,7 +90,8 @@
       ],
       "keywords": "projection mapping edificio costi, videomapping facciata permessi, mapping architetturale",
       "fallback": "/img/interconnection/1.jpg",
-      "fallbackAlt": "Proiezioni architetturali su grande superficie"
+      "fallbackAlt": "Proiezioni architetturali su grande superficie",
+      "format": "guida"
     },
     { "id": "installazione-permanente",
       "title": "Installazione temporanea o permanente: cosa cambia in progettazione, costi e manutenzione",
@@ -96,7 +103,8 @@
       ],
       "keywords": "installazione permanente museo, manutenzione installazione interattiva, installazione temporanea evento",
       "fallback": "/img/sansalvador/cover.jpg",
-      "fallbackAlt": "San Salvador, murales con fili fluorescenti e luce UV"
+      "fallbackAlt": "San Salvador, murales con fili fluorescenti e luce UV",
+      "format": "guida"
     },
     { "id": "generativo-vs-video",
       "title": "Contenuti generativi o video prodotto: cosa conviene per un'installazione",
@@ -108,7 +116,8 @@
       ],
       "keywords": "arte generativa installazione, contenuti generativi eventi, video vs generativo",
       "fallback": "/img/liquid/cover.jpg",
-      "fallbackAlt": "Grafica generativa in tempo reale su pareti"
+      "fallbackAlt": "Grafica generativa in tempo reale su pareti",
+      "format": "guida"
     },
     { "id": "test-persone-vere",
       "title": "La regola dei tre secondi: perché testo ogni installazione con persone vere prima dell'evento",
@@ -121,7 +130,8 @@
       "keywords": "test installazione interattiva, user test esperienza immersiva, progettare interazione pubblico",
       "fallback": "/img/hc/copertina.jpg",
       "fallbackOg": "/img/hc/copertina.jpg",
-      "fallbackAlt": "Visitatori davanti a un'installazione interattiva"
+      "fallbackAlt": "Visitatori davanti a un'installazione interattiva",
+      "format": "guida"
     },
     { "id": "regia-evento",
       "title": "Cosa fa la regia durante un evento immersivo, e perché non è un costo da tagliare",
@@ -134,7 +144,8 @@
       "keywords": "regia evento immersivo, tecnico installazione evento, live show control",
       "fallback": "/img/hc/copertina.jpg",
       "fallbackOg": "/img/hc/copertina.jpg",
-      "fallbackAlt": "Banco regia con GrandMA3 e schermi durante un evento"
+      "fallbackAlt": "Banco regia con GrandMA3 e schermi durante un evento",
+      "format": "guida"
     },
     { "id": "luce-uv-fili",
       "title": "Fili e luce UV: come nasce un'architettura di luce dal vuoto",
@@ -146,7 +157,8 @@
       ],
       "keywords": "installazione fili luce uv, string art luce ultravioletta, architettura di luce",
       "fallback": "/img/cathedral/1.jpg",
-      "fallbackAlt": "The Cathedral, archi di fili fluorescenti sotto luce UV"
+      "fallbackAlt": "The Cathedral, archi di fili fluorescenti sotto luce UV",
+      "format": "opera"
     },
     { "id": "musei-interattivi",
       "title": "Installazioni interattive nei musei: cosa funziona con il pubblico e cosa resta spento",
@@ -158,7 +170,8 @@
       ],
       "keywords": "installazione interattiva museo, museo esperienziale, tecnologia nei musei",
       "fallback": "/img/liquid/cover.jpg",
-      "fallbackAlt": "Visitatori che interagiscono con proiezioni generative"
+      "fallbackAlt": "Visitatori che interagiscono con proiezioni generative",
+      "format": "guida"
     },
     { "id": "fiere-stand",
       "title": "Uno stand che si ricorda: installazioni interattive in fiera senza sprecare il budget",
@@ -171,7 +184,8 @@
       "keywords": "installazione interattiva stand fiera, stand esperienziale, attrarre visitatori fiera",
       "fallback": "/img/hc/copertina.jpg",
       "fallbackOg": "/img/hc/copertina.jpg",
-      "fallbackAlt": "Installazione interattiva per stand fieristico"
+      "fallbackAlt": "Installazione interattiva per stand fieristico",
+      "format": "guida"
     },
     { "id": "retail-vetrine",
       "title": "Vetrine e retail interattivi: quando la tecnologia vende e quando disturba",
@@ -184,7 +198,8 @@
       "keywords": "vetrina interattiva, retail esperienziale, installazione negozio",
       "fallback": "/img/hc/copertina.jpg",
       "fallbackOg": "/img/hc/copertina.jpg",
-      "fallbackAlt": "Installazione luminosa interattiva in uno spazio retail"
+      "fallbackAlt": "Installazione luminosa interattiva in uno spazio retail",
+      "format": "guida"
     },
     { "id": "grandma3-luce-dati",
       "title": "Quando i dati pilotano la luce: collegare sensori e GrandMA3 in tempo reale",
@@ -196,7 +211,8 @@
       ],
       "keywords": "grandma3 osc artnet, luce controllata dai dati, light design interattivo",
       "fallback": "/img/animus/cover.jpg",
-      "fallbackAlt": "Luci controllate dai dati EEG durante Neuro.Flow"
+      "fallbackAlt": "Luci controllate dai dati EEG durante Neuro.Flow",
+      "format": "guida"
     },
     { "id": "partecipazione-telefono",
       "title": "Far partecipare il pubblico dal telefono: QR, web app e niente da scaricare",
@@ -208,7 +224,8 @@
       ],
       "keywords": "installazione partecipativa smartphone, qr code installazione interattiva, web app evento",
       "fallback": "/img/liquid/cover.jpg",
-      "fallbackAlt": "Liquid Thoughts, partecipazione dal telefono tramite QR"
+      "fallbackAlt": "Liquid Thoughts, partecipazione dal telefono tramite QR",
+      "format": "opera"
     },
     { "id": "errori-primo-progetto",
       "title": "I 10 errori che vedo più spesso nel primo progetto immersivo di un brand",
@@ -220,7 +237,8 @@
       ],
       "keywords": "errori installazione immersiva, esperienza immersiva brand, evento immersivo consigli",
       "fallback": "/img/interconnection/1.jpg",
-      "fallbackAlt": "Spazio immersivo con luce e proiezioni"
+      "fallbackAlt": "Spazio immersivo con luce e proiezioni",
+      "format": "guida"
     },
     { "id": "sostenibilita-installazioni",
       "title": "Installazioni immersive e consumo: proiettori, LED e come pesare meno",
@@ -232,7 +250,8 @@
       ],
       "keywords": "consumo energetico installazione, evento sostenibile tecnologia, led vs proiettore consumo",
       "fallback": "/img/cathedral/1.jpg",
-      "fallbackAlt": "Installazione a luce UV a basso consumo"
+      "fallbackAlt": "Installazione a luce UV a basso consumo",
+      "format": "guida"
     },
     { "id": "documentare-installazione",
       "title": "Come documentare un'installazione perché viva oltre l'evento: video, foto, dati",
@@ -244,7 +263,8 @@
       ],
       "keywords": "documentare installazione artistica, video installazione immersiva, foto arte luce",
       "fallback": "/img/sansalvador/cover.jpg",
-      "fallbackAlt": "Ripresa notturna di un'installazione luminosa"
+      "fallbackAlt": "Ripresa notturna di un'installazione luminosa",
+      "format": "guida"
     },
     { "id": "arte-scienza-collaborare",
       "title": "Artisti e laboratori di ricerca: come impostare una collaborazione che funziona",
@@ -256,7 +276,8 @@
       ],
       "keywords": "collaborazione arte scienza, art science project, ricerca universitaria arte digitale",
       "fallback": "/img/animus/cover.jpg",
-      "fallbackAlt": "Neuro.Flow, ricerca aperta tra arte e neuroscienze"
+      "fallbackAlt": "Neuro.Flow, ricerca aperta tra arte e neuroscienze",
+      "format": "ricerca"
     },
     { "id": "luce-emozione",
       "title": "Perché la luce ci emoziona: tre cose che ho imparato accendendo spazi per dieci anni",
@@ -268,7 +289,8 @@
       ],
       "keywords": "luce ed emozione, light art significato, arte della luce",
       "fallback": "/img/cathedral/1.jpg",
-      "fallbackAlt": "Geometrie di luce in uno spazio buio"
+      "fallbackAlt": "Geometrie di luce in uno spazio buio",
+      "format": "riflessione"
     },
     { "id": "tempi-produzione",
       "title": "Da quattro a otto settimane: il calendario reale di un'installazione, settimana per settimana",
@@ -281,7 +303,8 @@
       "keywords": "tempi realizzazione installazione immersiva, quanto tempo installazione interattiva, pianificare evento immersivo",
       "fallback": "/img/hc/copertina.jpg",
       "fallbackOg": "/img/hc/copertina.jpg",
-      "fallbackAlt": "Montaggio di un'installazione immersiva"
+      "fallbackAlt": "Montaggio di un'installazione immersiva",
+      "format": "guida"
     },
     { "id": "ai-generativa-installazioni",
       "title": "Intelligenza artificiale nelle installazioni dal vivo: cosa funziona oggi in tempo reale",
@@ -293,7 +316,242 @@
       ],
       "keywords": "ai generativa installazione interattiva, streamdiffusion touchdesigner, intelligenza artificiale arte dal vivo",
       "fallback": "/img/liquid/cover.jpg",
-      "fallbackAlt": "Grafica generativa in tempo reale"
+      "fallbackAlt": "Grafica generativa in tempo reale",
+      "format": "guida"
+    },
+    { "id": "connessioni-invisibili",
+      "format": "riflessione",
+      "title": "Le connessioni invisibili: cosa cerco davvero in ogni installazione",
+      "angle": "manifesto in prima persona della ricerca (essere umano, universo, tecnologia): cosa significa rendere tangibile ciò che sfugge alla percezione, con esempi da The Cathedral, Neuro.Flow e Interconnection",
+      "tags": [
+        "Ricerca",
+        "Riflessioni",
+        "Opere"
+      ],
+      "keywords": "ricerca artistica luce tecnologia, arte immersiva significato, connessioni invisibili arte",
+      "fallback": "/img/cathedral/1.jpg",
+      "fallbackAlt": "The Cathedral, fili e luce UV nel buio"
+    },
+    { "id": "percorso-scultura-luce",
+      "format": "percorso",
+      "title": "Dalla scultura alla luce: perché ho smesso di aggiungere materia e ho iniziato a togliere il buio",
+      "angle": "il passaggio dagli studi di Scultura a Brera alle installazioni di luce, fili e segnali cerebrali: svolte, dubbi, cosa è rimasto della scultura nel modo di pensare lo spazio",
+      "tags": [
+        "Percorso",
+        "Scultura",
+        "Light Design"
+      ],
+      "keywords": "da scultura a light art, percorso artista luce, accademia di brera installazioni",
+      "fallback": "/img/sansalvador/cover.jpg",
+      "fallbackAlt": "San Salvador, fili fluorescenti sotto luce UV"
+    },
+    { "id": "cathedral-vuoto",
+      "format": "opera",
+      "title": "The Cathedral: costruire una cattedrale con il vuoto",
+      "angle": "racconto dell'opera: fili tesi, luce UV, lo spazio nascosto che appare solo al buio, cosa fanno le persone quando entrano, cosa ho capito lavorando anni sullo stesso concetto",
+      "tags": [
+        "Opere",
+        "Light Design",
+        "The Cathedral"
+      ],
+      "keywords": "the cathedral installazione fili luce uv, string art installazione, architettura di luce",
+      "fallback": "/img/cathedral/1.jpg",
+      "fallbackAlt": "The Cathedral, archi di fili fluorescenti sotto luce UV"
+    },
+    { "id": "san-salvador-notte",
+      "format": "opera",
+      "title": "San Salvador: un murales che esiste solo al buio",
+      "angle": "racconto dell'opera murale con fili fluorescenti e luce UV: il muro di giorno e di notte, il lavoro manuale, la relazione con il luogo e con chi ci passa",
+      "tags": [
+        "Opere",
+        "San Salvador",
+        "Luce UV"
+      ],
+      "keywords": "murales luce uv, street art fili fluorescenti, san salvador installazione",
+      "fallback": "/img/sansalvador/cover.jpg",
+      "fallbackAlt": "San Salvador, murales con fili fluorescenti e luce UV"
+    },
+    { "id": "interconnection-600",
+      "format": "opera",
+      "title": "Interconnection: seicento metri quadri per sentirsi parte di qualcosa",
+      "angle": "racconto dell'installazione immersiva alla Holy Club Gallery: audio, video e luce che avvolgono, cosa succede tra sconosciuti nello stesso spazio, la regia dell'esperienza",
+      "tags": [
+        "Opere",
+        "Immersivo",
+        "Interconnection"
+      ],
+      "keywords": "interconnection installazione immersiva, holy club gallery, spazio immersivo 600 mq",
+      "fallback": "/img/interconnection/1.jpg",
+      "fallbackAlt": "Interconnection, installazione immersiva audio video luce"
+    },
+    { "id": "animus-backstage",
+      "format": "opera",
+      "title": "Animus et Corpus al Bright Festival: quello che il video non mostra",
+      "angle": "dietro le quinte dell'opera EEG al Bright Festival 2025: i test, la paura che il segnale non arrivi, i visitatori con il caschetto, cosa è successo davvero e cosa cambierei",
+      "tags": [
+        "Opere",
+        "EEG",
+        "Bright Festival"
+      ],
+      "keywords": "animus et corpus bright festival, installazione eeg backstage, arte onde cerebrali dal vivo",
+      "fallback": "/img/animus/cover.jpg",
+      "fallbackAlt": "Animus et Corpus, installazione EEG al Bright Festival"
+    },
+    { "id": "neuroflow-diario-1",
+      "format": "ricerca",
+      "title": "Neuro.Flow, diario di ricerca: la prima volta che due cervelli si sono allineati",
+      "angle": "diario onesto della ricerca sulla sincronia inter-cerebrale: la domanda di partenza, il setup con due headset, cosa si è osservato in modo descrittivo (nessun dato numerico inventato), i dubbi e cosa resta aperto",
+      "tags": [
+        "Neuro.Flow",
+        "Ricerca",
+        "EEG"
+      ],
+      "keywords": "neuro flow ricerca sincronia cerebrale, hyperscanning arte, diario di ricerca artista",
+      "fallback": "/img/animus/cover.jpg",
+      "fallbackAlt": "Neuro.Flow, due partecipanti con headset EEG"
+    },
+    { "id": "sincronia-intimita",
+      "format": "riflessione",
+      "title": "La sincronia è una forma di intimità",
+      "angle": "riflessione su cosa significa vedere due persone allinearsi attraverso la luce: fiducia, attenzione, silenzio; il ruolo della tecnologia come specchio e non come protagonista",
+      "tags": [
+        "Riflessioni",
+        "Neuro.Flow",
+        "Percezione"
+      ],
+      "keywords": "sincronia tra persone arte, intimità e tecnologia, arte relazionale eeg",
+      "fallback": "/img/animus/cover.jpg",
+      "fallbackAlt": "Sfera proiettata che reagisce alla sincronia di due cervelli"
+    },
+    { "id": "corpo-interfaccia",
+      "format": "riflessione",
+      "title": "Il corpo come interfaccia: perché nelle mie opere non ci sono bottoni",
+      "angle": "riflessione sull'interazione senza schermi: presenza, movimento, respiro, onde cerebrali; cosa perde un'opera quando chiede di premere qualcosa",
+      "tags": [
+        "Riflessioni",
+        "Interazione",
+        "Percezione"
+      ],
+      "keywords": "interazione senza schermi arte, corpo come interfaccia, installazioni interattive senza bottoni",
+      "fallback": "/img/liquid/cover.jpg",
+      "fallbackAlt": "Visitatori davanti a una proiezione generativa reattiva"
+    },
+    { "id": "cosa-resta-spenta",
+      "format": "riflessione",
+      "title": "Cosa resta di un'installazione quando si spegne",
+      "angle": "sull'effimero: il momento dello smontaggio, la memoria del pubblico, le foto che non bastano, perché continuo a costruire cose che durano poco",
+      "tags": [
+        "Riflessioni",
+        "Effimero",
+        "Opere"
+      ],
+      "keywords": "arte effimera installazioni, smontaggio installazione, memoria esperienza immersiva",
+      "fallback": "/img/cathedral/1.jpg",
+      "fallbackAlt": "Installazione di luce in uno spazio buio"
+    },
+    { "id": "regola-come-gesto",
+      "format": "riflessione",
+      "title": "L'arte generativa non è casuale: la regola come gesto",
+      "angle": "cosa significa scrivere una regola invece di disegnare una forma; controllo e sorpresa; Liquid Thoughts e i sistemi che reagiscono al pubblico come esempio",
+      "tags": [
+        "Generativo",
+        "Riflessioni",
+        "Processo"
+      ],
+      "keywords": "arte generativa significato, regole e casualità arte, sistemi generativi installazioni",
+      "fallback": "/img/liquid/cover.jpg",
+      "fallbackAlt": "Liquid Thoughts, grafica generativa in tempo reale"
+    },
+    { "id": "liquid-thoughts-pubblico",
+      "format": "opera",
+      "title": "Liquid Thoughts: quando il pubblico scrive l'opera dal telefono",
+      "angle": "racconto dell'opera partecipativa: il QR, i pensieri che arrivano, la moderazione, cosa hanno scritto le persone (in generale, senza citare frasi reali), il momento in cui l'opera non è più mia",
+      "tags": [
+        "Opere",
+        "Partecipazione",
+        "Liquid Thoughts"
+      ],
+      "keywords": "liquid thoughts installazione partecipativa, arte partecipativa smartphone, opera collettiva qr",
+      "fallback": "/img/liquid/cover.jpg",
+      "fallbackAlt": "Liquid Thoughts, partecipazione dal telefono tramite QR"
+    },
+    { "id": "sailing-memorie",
+      "format": "opera",
+      "title": "Sailing Through Memories: le memorie degli altri come materia",
+      "angle": "racconto dell'opera: memorie condivise dal pubblico via web che diventano immagini e movimento, il rapporto tra intimità e proiezione pubblica, cosa ho imparato sulla fiducia",
+      "tags": [
+        "Opere",
+        "Memoria",
+        "Partecipazione"
+      ],
+      "keywords": "sailing through memories installazione, memorie condivise arte, opera partecipativa web",
+      "fallback": "/img/sailing/cover.jpg",
+      "fallbackAlt": "Sailing Through Memories, memorie proiettate"
+    },
+    { "id": "maestri-luce",
+      "format": "riflessione",
+      "title": "I miei riferimenti: Turrell, Eliasson, Kapoor, Kusama, Shiota, Colombo",
+      "angle": "cosa ho preso da ciascuno (spazio, luce, percezione, ripetizione, filo, ambiente) e dove il mio lavoro prende un'altra strada; niente aneddoti inventati sugli artisti, solo il loro lavoro pubblico",
+      "tags": [
+        "Riflessioni",
+        "Riferimenti",
+        "Light Art"
+      ],
+      "keywords": "james turrell influenza, olafur eliasson luce, chiharu shiota fili, light art riferimenti",
+      "fallback": "/img/cathedral/1.jpg",
+      "fallbackAlt": "Geometrie di fili e luce nel buio"
+    },
+    { "id": "silenzio-installazioni",
+      "format": "riflessione",
+      "title": "Il silenzio dentro le installazioni: perché non tutto deve suonare",
+      "angle": "sul suono e sulla sua assenza nelle opere immersive: quando l'audio guida e quando disturba, il respiro del pubblico come colonna sonora",
+      "tags": [
+        "Riflessioni",
+        "Suono",
+        "Immersivo"
+      ],
+      "keywords": "suono installazioni immersive, silenzio arte immersiva, audio spazializzato arte",
+      "fallback": "/img/interconnection/1.jpg",
+      "fallbackAlt": "Spazio immersivo con luce e proiezioni"
+    },
+    { "id": "hal-portfolio",
+      "format": "percorso",
+      "title": "HAL sul mio sito: perché ho dato una voce e una memoria al mio portfolio",
+      "angle": "il perché di un assistente che parla con chi visita il sito: curiosità, gioco, ricerca sull'interazione; cosa impara, cosa non deve fare, cosa c'entra con le installazioni",
+      "tags": [
+        "Percorso",
+        "AI",
+        "Sito"
+      ],
+      "keywords": "assistente ai portfolio artista, intelligenza artificiale sito artista, hal 9000 sito",
+      "fallback": "/img/liquid/cover.jpg",
+      "fallbackAlt": "Interfaccia luminosa e generativa"
+    },
+    { "id": "nascita-opera",
+      "format": "percorso",
+      "title": "Come nasce un'opera: idea, prova, spazio",
+      "angle": "il metodo personale in tre stadi: l'idea che arriva da una domanda, la prova in studio con materiali veri, lo spazio che cambia tutto; esempi dalle opere elencate",
+      "tags": [
+        "Percorso",
+        "Processo",
+        "Opere"
+      ],
+      "keywords": "come nasce un'installazione artistica, processo creativo light art, metodo artista digitale",
+      "fallback": "/img/sansalvador/cover.jpg",
+      "fallbackAlt": "Lavoro manuale sui fili fluorescenti"
+    },
+    { "id": "esporre-luoghi",
+      "format": "percorso",
+      "title": "Esporre a Firenze, Milano, Dubai: cosa cambia in un'opera quando cambia il luogo",
+      "angle": "riflessione sui luoghi in cui ho esposto (solo quelli elencati, senza date): come lo spazio, il pubblico e la luce ambientale trasformano la stessa idea",
+      "tags": [
+        "Percorso",
+        "Mostre",
+        "Opere"
+      ],
+      "keywords": "esporre installazioni luce musei, biennale di firenze installazione, art dubai artista italiano",
+      "fallback": "/img/interconnection/1.jpg",
+      "fallbackAlt": "Installazione immersiva in uno spazio espositivo"
     }
   ],
   "existing": [
