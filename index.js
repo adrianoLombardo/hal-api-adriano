@@ -1048,6 +1048,9 @@ app.get('/api/admin/mem0', adminAuth, async (req, res) => {
    POST /api/proactive — HAL parla spontaneamente
    Genera un messaggio contestuale basato sulla pagina + contesto
    ──────────────────────────────────────────────── */
+// Stato del cervello (nessun segreto): provider in ordine, modelli in pausa quota, cooldown
+app.get('/api/llm/status', (req, res) => res.json(llm.status()));
+
 app.post('/api/proactive', async (req, res) => {
   const { page, context, history, overlayOpen } = req.body;
   const anthropicKey = llm.configured() ? 'ok' : '';

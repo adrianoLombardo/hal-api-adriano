@@ -61,8 +61,16 @@ const usable = (n) => !(cooldown[n] > Date.now());
 function available() { return order().filter(usable)[0] || 'none'; }
 function configured() { return order().length > 0; }
 function isFree() { const a = available(); return a !== 'none' && a !== 'anthropic'; }
+function modelsStatus() {
+  const out = {};
+  for (const [k, v] of Object.entries(badModel)) {
+    if (v === true) out[k] = 'non disponibile';
+    else if (v > Date.now()) out[k] = 'pausa ' + Math.ceil((v - Date.now()) / 60000) + ' min';
+  }
+  return out;
+}
 function status() {
-  return { order: order(), available: available(), cooldown: Object.fromEntries(Object.entries(cooldown).filter(([, t]) => t > Date.now()).map(([k, t]) => [k, Math.round((t - Date.now()) / 1000) + 's'])) };
+  return { order: order(), available: available(), models: modelsStatus(), cooldown: Object.fromEntries(Object.entries(cooldown).filter(([, t]) => t > Date.now()).map(([k, t]) => [k, Math.round((t - Date.now()) / 1000) + 's'])) };
 }
 
 class LLMError extends Error {
@@ -125,6 +133,11 @@ async function request(opts, stream) {
     const key = env(cfg.keyVar);
     const models = needVision ? cfg.visionModels() : cfg.models();
     if (!models.length) continue;
+    const pausedModels = models.filter(m => { const b = badModel[name + '|' + m]; return b === true || (typeof b === 'number' && b > Date.now()); });
+    if (pausedModels.length === models.length) {
+      errors.push(`${name}: tutti i modelli in pausa quota (${models.map(m => { const b = badModel[name + '|' + m]; return m + (typeof b === 'number' ? ' ' + Math.ceil((b - Date.now()) / 60000) + 'min' : ' n/d'); }).join(', ')})`);
+      continue;
+    }
     let providerDown = false;
     for (const model of models) {
       const bm = badModel[name + '|' + model];
@@ -150,9 +163,12 @@ async function request(opts, stream) {
       }
       if (res.status === 429) {
         // quota del modello (piano free): pausa solo QUEL modello e prova il successivo
-        const daily = /per day|daily|RPD|quota/i.test(detail);
-        badModel[name + '|' + model] = Date.now() + (daily ? 6 * 3600 * 1000 : 5 * 60 * 1000);
-        console.warn(`[LLM] ${name}/${model} in pausa (${daily ? '6 h' : '5 min'}): 429`);
+        const full = body.slice(0, 2000);
+        const zero = /limit(_value)?:\s*0\b|limit of 0\b/i.test(full);          // modello senza quota sul piano: escludilo
+        const daily = /per ?day|PerDay|daily|RPD/i.test(full);
+        const ms = zero ? 24 * 3600 * 1000 : daily ? 3 * 3600 * 1000 : 2 * 60 * 1000;
+        badModel[name + '|' + model] = Date.now() + ms;
+        console.warn(`[LLM] ${name}/${model} 429 → pausa ${zero ? '24 h (limite 0)' : daily ? '3 h (quota giornaliera)' : '2 min'}: ${full.slice(0, 400)}`);
         continue;
       }
       if (res.status === 404 || (res.status === 400 && /model|not found|does not exist|decommissioned|unsupported/i.test(detail))) {
