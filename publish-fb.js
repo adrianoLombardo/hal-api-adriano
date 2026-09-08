@@ -16,25 +16,50 @@
 
    Variabili (Railway):
      FB_PAGE_ID       id numerico della Pagina
-     FB_PAGE_TOKEN    token della Pagina (non quello dell'utente)
+     FB_PAGE_TOKEN    token della Pagina. Se manca si usa FB_USER_TOKEN.
+     FB_USER_TOKEN    token dell'utente con pages_show_list + pages_manage_posts:
+                      il server ricava da solo il token della Pagina con GET /me/accounts
+                      e lo tiene in cache un'ora. Comodo perché è quello che si copia
+                      con un clic dall'Esploratore per la API Graph, e un token utente
+                      di lunga durata (60 giorni) genera token di Pagina sempre validi.
      FB_API_VERSION   default v23.0
      FB_ENABLED=0     spegne la pubblicazione
    ──────────────────────────────────────────────── */
 'use strict';
 const env = (k, d = '') => (process.env[k] || d).trim();
 const VER = () => env('FB_API_VERSION', 'v23.0');
-let dynamicToken = null;
+let dynamicToken = null;                    // token di Pagina salvato nello stato
+let derived = { token: null, at: 0 };       // token di Pagina ricavato da FB_USER_TOKEN
 const setToken = (t) => { dynamicToken = t || null; };
-const TOKEN = () => dynamicToken || env('FB_PAGE_TOKEN');
 const PAGE = () => env('FB_PAGE_ID');
 const log = (...a) => console.log('[FB]', ...a);
+const warn = (...a) => console.warn('[FB]', ...a);
 
-const configured = () => !!(TOKEN() && PAGE()) && env('FB_ENABLED') !== '0';
+const configured = () => !!(PAGE() && (dynamicToken || env('FB_PAGE_TOKEN') || env('FB_USER_TOKEN'))) && env('FB_ENABLED') !== '0';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/** token della Pagina: esplicito, salvato, oppure ricavato dal token utente */
+async function TOKEN({ fresh = false } = {}) {
+  const explicit = dynamicToken || env('FB_PAGE_TOKEN');
+  if (explicit) return explicit;
+  const user = env('FB_USER_TOKEN');
+  if (!user) throw new Error('Facebook non configurato: manca FB_PAGE_TOKEN o FB_USER_TOKEN');
+  if (!fresh && derived.token && Date.now() - derived.at < 3600 * 1000) return derived.token;
+  const url = new URL(`https://graph.facebook.com/${VER()}/me/accounts`);
+  url.search = new URLSearchParams({ fields: 'id,name,access_token', limit: '100', access_token: user }).toString();
+  const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
+  const j = await r.json().catch(() => ({}));
+  if (j.error) throw new Error(`token utente non valido: ${j.error.message || j.error.code}`);
+  const page = (j.data || []).find(p => String(p.id) === PAGE());
+  if (!page) throw new Error(`la Pagina ${PAGE()} non è tra quelle autorizzate (${(j.data || []).map(p => p.id).join(', ') || 'nessuna'})`);
+  derived = { token: page.access_token, at: Date.now() };
+  log(`token della Pagina «${page.name}» ricavato dal token utente`);
+  return derived.token;
+}
 
 async function api(pathname, { method = 'GET', params = {}, timeoutMs = 60000 } = {}) {
   const url = new URL(`https://graph.facebook.com/${VER()}/${pathname}`);
-  const body = new URLSearchParams({ ...params, access_token: TOKEN() });
+  const body = new URLSearchParams({ ...params, access_token: await TOKEN() });
   const opts = { method, signal: AbortSignal.timeout(timeoutMs) };
   if (method === 'GET') url.search = body.toString();
   else { opts.body = body; opts.headers = { 'Content-Type': 'application/x-www-form-urlencoded' }; }
@@ -54,7 +79,7 @@ const me = () => api(PAGE(), { params: { fields: 'id,name,followers_count' } });
 
 /** scadenza del token: i token di Pagina derivati da un token utente lungo non scadono */
 async function tokenInfo() {
-  const j = await api('debug_token', { params: { input_token: TOKEN() } });
+  const j = await api('debug_token', { params: { input_token: await TOKEN() } });
   const d = j.data || {};
   return { valid: !!d.is_valid, expiresAt: d.expires_at || 0, scopes: d.scopes || [], type: d.type || '' };
 }
@@ -64,7 +89,7 @@ async function tokenInfo() {
  * videoUrl deve essere raggiungibile pubblicamente da facebookexternalhit.
  */
 async function publishReel({ videoUrl, description = '', onProgress = () => {} }) {
-  if (!configured()) throw new Error('Facebook non configurato: mancano FB_PAGE_ID e FB_PAGE_TOKEN');
+  if (!configured()) throw new Error('Facebook non configurato: manca FB_PAGE_ID e uno tra FB_PAGE_TOKEN e FB_USER_TOKEN');
   if (!videoUrl) throw new Error('videoUrl mancante');
 
   log('apro la sessione di caricamento…');
@@ -77,7 +102,7 @@ async function publishReel({ videoUrl, description = '', onProgress = () => {} }
   log('Facebook scarica il video…');
   const up = await fetch(uploadUrl, {
     method: 'POST',
-    headers: { Authorization: `OAuth ${TOKEN()}`, file_url: videoUrl, offset: '0' },
+    headers: { Authorization: `OAuth ${await TOKEN()}`, file_url: videoUrl, offset: '0' },
     signal: AbortSignal.timeout(10 * 60 * 1000),
   });
   const upText = await up.text();
@@ -117,4 +142,7 @@ async function publishReel({ videoUrl, description = '', onProgress = () => {} }
   return { id: videoId, permalink: `https://www.facebook.com/reel/${videoId}`, pending: true };
 }
 
-module.exports = { configured, me, tokenInfo, publishReel, setToken };
+/** quale via si sta usando: utile in /social */
+const mode = () => (dynamicToken || env('FB_PAGE_TOKEN')) ? 'token di Pagina' : 'token utente';
+
+module.exports = { configured, me, tokenInfo, publishReel, setToken, mode };

@@ -357,9 +357,9 @@ async function onCommand(cmd, arg, chatId) {
           const m = await fb.me();
           let nota = '';
           try { const t = await fb.tokenInfo(); nota = t.expiresAt ? ` — token valido fino al ${new Date(t.expiresAt * 1000).toLocaleDateString('it-IT')}` : ' — token senza scadenza'; } catch (e) {}
-          righe.push(`📘 Facebook: Pagina «${esc(m.name || m.id)}»${esc(nota)}`);
+          righe.push(`📘 Facebook: Pagina «${esc(m.name || m.id)}» via ${esc(fb.mode())}${esc(nota)}`);
         } catch (e) { righe.push(`📘 Facebook: token NON valido — ${esc((e.message || '').slice(0, 160))}`); }
-      } else righe.push('📘 Facebook: non configurato (FB_PAGE_ID, FB_PAGE_TOKEN)');
+      } else righe.push('📘 Facebook: non configurato (FB_PAGE_ID + FB_USER_TOKEN oppure FB_PAGE_TOKEN)');
       return send(righe.join('\n'));
     }
     case 'reelpausa': state.paused = true; saveState(); return send('Promemoria dei reel in pausa. /reelriprendi per riattivarli.');
