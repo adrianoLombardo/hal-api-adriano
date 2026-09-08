@@ -494,6 +494,8 @@ ${JSON.stringify(ld, null, 2)}
 <link rel="stylesheet" href="/css/site.css?v=5">
 <style>
 /* stili locali: solo layout; colori, font e componenti vengono da /css/site.css */
+/* colonna di lettura centrata anche su schermi larghi */
+main.sn-wrap{max-width:calc(var(--measure) + 2*var(--sp-page))}
 .sn-hero{max-width:var(--measure)}
 .sn-hero .article-meta{display:flex;flex-wrap:wrap;gap:.6rem 1.4rem;align-items:center;margin:1.4rem 0 0}
 .article-meta .tag{border:1px solid var(--g3);padding:.25rem .55rem;font-size:.55rem}
