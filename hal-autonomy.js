@@ -21,7 +21,7 @@ const CLAUDE_API     = 'https://api.anthropic.com/v1/messages';
 const CLAUDE_MODEL   = 'claude-haiku-4-5-20251001';
 const CLAUDE_VERSION = '2023-06-01';
 
-const CYCLE_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours
+const CYCLE_INTERVAL = 6 * 60 * 60 * 1000; // 2 hours
 const MAX_ACTIVE_GOALS = 5;
 const MAX_DIARY_ENTRIES = 200;
 const MAX_SOCIAL_DRAFTS = 50;
@@ -140,7 +140,7 @@ class HALAutonomy {
       CYCLE_INTERVAL
     );
     this._intervalHandle.unref();
-    console.log('[AUTONOMY] Started — cycle every 2h');
+    console.log('[AUTONOMY] Started — cycle every 6h');
   }
 
   stop() {

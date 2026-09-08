@@ -56,10 +56,11 @@ function order() {
 }
 
 const cooldown = {};   // provider → timestamp fino a cui è sospeso
-const badModel = {};   // "provider|model" → modello inesistente
+const badModel = {};   // "provider|model" → true (modello inesistente) oppure timestamp di fine pausa (quota 429)
 const usable = (n) => !(cooldown[n] > Date.now());
 function available() { return order().filter(usable)[0] || 'none'; }
 function configured() { return order().length > 0; }
+function isFree() { const a = available(); return a !== 'none' && a !== 'anthropic'; }
 function status() {
   return { order: order(), available: available(), cooldown: Object.fromEntries(Object.entries(cooldown).filter(([, t]) => t > Date.now()).map(([k, t]) => [k, Math.round((t - Date.now()) / 1000) + 's'])) };
 }
@@ -126,7 +127,8 @@ async function request(opts, stream) {
     if (!models.length) continue;
     let providerDown = false;
     for (const model of models) {
-      if (badModel[name + '|' + model]) continue;
+      const bm = badModel[name + '|' + model];
+      if (bm === true || (typeof bm === 'number' && bm > Date.now())) continue;
       const req = buildRequest(name, cfg, key, model, opts, stream);
       let res;
       try {
@@ -145,6 +147,13 @@ async function request(opts, stream) {
       lastStatus = res.status;
       if (res.status === 400 && /reasoning_effort/i.test(detail) && !opts._noReasoningField) {
         return request({ ...opts, _noReasoningField: true }, stream); // riprova senza il campo
+      }
+      if (res.status === 429) {
+        // quota del modello (piano free): pausa solo QUEL modello e prova il successivo
+        const daily = /per day|daily|RPD|quota/i.test(detail);
+        badModel[name + '|' + model] = Date.now() + (daily ? 6 * 3600 * 1000 : 5 * 60 * 1000);
+        console.warn(`[LLM] ${name}/${model} in pausa (${daily ? '6 h' : '5 min'}): 429`);
+        continue;
       }
       if (res.status === 404 || (res.status === 400 && /model|not found|does not exist|decommissioned|unsupported/i.test(detail))) {
         badModel[name + '|' + model] = true; // modello sbagliato: prova il prossimo dello stesso provider
@@ -216,4 +225,4 @@ async function stream(opts) {
   return { provider: name, model, tokens: tokens(), cancel: () => { try { res.body.cancel(); } catch (e) {} } };
 }
 
-module.exports = { complete, stream, available, configured, order, status, LLMError };
+module.exports = { complete, stream, available, configured, isFree, order, status, LLMError };

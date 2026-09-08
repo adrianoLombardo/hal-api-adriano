@@ -1756,7 +1756,7 @@ function dailyReset() {
 }
 
 // Inner loop: think every 30 minutes
-setInterval(innerLoop, 30 * 60 * 1000);
+setInterval(innerLoop, 2 * 60 * 60 * 1000); // ogni 2 h: con i piani gratuiti la quota va risparmiata
 // Daily reset
 setInterval(dailyReset, 5 * 60 * 1000);
 // First thought 60 seconds after startup

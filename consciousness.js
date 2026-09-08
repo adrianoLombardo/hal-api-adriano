@@ -190,6 +190,7 @@ class HALConsciousness {
     this._monoCache = this._monoCache || new Map();
     const prev = this._monoCache.get(sessionId);
     if (!userMessage || userMessage.length < 20) return Promise.resolve(prev ? prev.value : null);
+    try { if (require('./llm').isFree() && process.env.HAL_MONOLOGUE !== '1') return Promise.resolve(prev ? prev.value : null); } catch (e) {}
     let memories = [], profile = {};
     try { memories = this.memory.retrieve(userMessage, 5) || []; } catch (e) {}
     try { profile = this.userModel.getOrCreate(sessionId) || {}; } catch (e) {}
@@ -498,7 +499,7 @@ class HALConsciousness {
    */
   _startPeriodicTasks() {
     if (this._periodicHandle) return;
-    const THIRTY_MINUTES = 30 * 60 * 1000;
+    const THIRTY_MINUTES = 3 * 60 * 60 * 1000; // in realtà 3 h: meno chiamate LLM sui piani gratuiti
     this._periodicHandle = setInterval(() => {
       this.periodicTasks();
     }, THIRTY_MINUTES);
