@@ -322,6 +322,39 @@ async function geminiImage(prompt) {
   throw new Error('immagine non generata: ' + errors.join(' | ').slice(0, 500));
 }
 
+const STYLE = 'Photorealistic editorial photograph, dark environment, cyan and teal light with soft white highlights, cinematic contrast, shallow depth of field, high detail. People, if any, only as distant silhouettes seen from behind. No text, no letters, no watermark, no logo, no faces.';
+function looksLikeImage(buf, mime) {
+  if (!buf || buf.length < 15000) return false;
+  const h = buf.slice(0, 4).toString('hex');
+  return h.startsWith('ffd8') || h === '89504e47' || h.startsWith('52494646') || /^image\//i.test(mime || '');
+}
+/** Hugging Face Inference (FLUX.1-schnell): gratis con HF_TOKEN da huggingface.co/settings/tokens */
+async function hfImage(prompt) {
+  const token = env('HF_TOKEN');
+  if (!token) throw new Error('HF_TOKEN assente');
+  const model = env('HF_IMAGE_MODEL', 'black-forest-labs/FLUX.1-schnell');
+  const r = await fetch(`https://router.huggingface.co/hf-inference/models/${model}`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'image/*' },
+    body: JSON.stringify({ inputs: `${prompt}. ${STYLE}`, parameters: { width: 1600, height: 896, num_inference_steps: 4 } }),
+    signal: AbortSignal.timeout(180000),
+  });
+  if (!r.ok) throw new Error(`HF ${model}: ${r.status} ${(await r.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200)}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (!looksLikeImage(buf, r.headers.get('content-type'))) throw new Error('HF: risposta non è un\'immagine');
+  return { buffer: buf, mime: r.headers.get('content-type') || 'image/jpeg', model: 'huggingface/' + model };
+}
+/** Pollinations (image.pollinations.ai): gratis, senza chiave, modello flux */
+async function pollinationsImage(prompt) {
+  const model = env('POLLINATIONS_MODEL', 'flux');
+  const seed = Math.floor(Math.random() * 1e6);
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(`${prompt}. ${STYLE}`)}?width=1600&height=900&nologo=true&model=${encodeURIComponent(model)}&seed=${seed}`;
+  const r = await fetch(url, { signal: AbortSignal.timeout(180000) });
+  if (!r.ok) throw new Error(`Pollinations: ${r.status} ${(await r.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200)}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (!looksLikeImage(buf, r.headers.get('content-type'))) throw new Error('Pollinations: risposta non è un\'immagine');
+  return { buffer: buf, mime: r.headers.get('content-type') || 'image/jpeg', model: 'pollinations/' + model };
+}
+
 async function buildImageSet(buffer, slug) {
   const dir = path.join(WORK_DIR, slug);
   fs.mkdirSync(dir, { recursive: true });
@@ -346,11 +379,23 @@ async function buildImageSet(buffer, slug) {
 
 async function makeCover(article, topic) {
   if (!MOCK) {
-    try {
-      const g = await geminiImage(article.imagePrompt || topic.title);
-      const set = await buildImageSet(g.buffer, article.slug);
-      return Object.assign(set, { kind: 'gemini', model: g.model, alt: article.imageAlt });
-    } catch (e) { warn('copertina Gemini fallita, uso una foto del sito:', (e.message || '').slice(0, 300)); state.lastError = 'immagine: ' + (e.message || '').slice(0, 200); }
+    const prompt = article.imagePrompt || topic.title;
+    const providers = [];
+    const order = env('BLOG_IMAGE_PROVIDERS', 'gemini,huggingface,pollinations').split(',').map(x => x.trim().toLowerCase());
+    for (const name of order) {
+      if (name === 'gemini' && env('GEMINI_API_KEY')) providers.push(['Gemini', () => geminiImage(prompt)]);
+      if (name === 'huggingface' && env('HF_TOKEN')) providers.push(['Hugging Face', () => hfImage(prompt)]);
+      if (name === 'pollinations') providers.push(['Pollinations', () => pollinationsImage(prompt)]);
+    }
+    for (const [label, fn] of providers) {
+      try {
+        const g = await fn();
+        const set = await buildImageSet(g.buffer, article.slug);
+        log(`copertina generata con ${g.model} (${g.buffer.length} byte)`);
+        return Object.assign(set, { kind: 'gemini', model: g.model, alt: article.imageAlt });
+      } catch (e) { warn(`copertina ${label} fallita:`, (e.message || '').slice(0, 300)); state.lastError = 'immagine: ' + (e.message || '').slice(0, 200); }
+    }
+    warn('nessun generatore di immagini disponibile, uso una foto del sito');
   }
   const src = topic.fallback || '/img/interconnection/1.jpg';
   const b = src.replace(/\.jpg$/, '');
@@ -642,7 +687,7 @@ function keyboard(draft) {
   ] };
 }
 
-async function sendDraft(draft) {
+async function sendDraft(draft, { onlyImage = false } = {}) {
   const a = draft.article, img = draft.image;
   const previewUrl = publicUrl ? `${publicUrl}/api/blog/preview/${draft.id}` : '';
   const caption = `📝 <b>Articolo proposto per il blog</b>\n\n<b>${esc(a.title)}</b>\n${esc(a.excerpt)}\n\n⏱ ${a.minutes} min · ${a.words} parole · 🏷 ${esc(a.tags.join(', '))}\n🖼 Copertina: ${esc(img.kind === 'gemini' ? 'generata con ' + img.model : 'foto del sito (' + img.src + ')')}\n🤖 Testo: ${esc(a.model || '-')}${previewUrl ? `\n\n🔗 <a href="${previewUrl}">Anteprima con lo stile del sito</a>` : ''}`;
@@ -650,7 +695,7 @@ async function sendDraft(draft) {
   if (img.preview && fs.existsSync(img.preview)) m = await tg('sendPhoto', { chat_id: owner(), caption, parse_mode: 'HTML' }, { photo: { path: img.preview, type: 'image/jpeg', name: 'cover.jpg' } });
   else m = await tg('sendPhoto', { chat_id: owner(), photo: SITE + img.src, caption, parse_mode: 'HTML' }).catch(() => send(owner(), caption));
   draft.messageIds = [m && m.message_id].filter(Boolean);
-  for (const chunk of splitMessage(htmlToTelegram(a.body))) { const r = await send(owner(), chunk); if (r) draft.messageIds.push(r.message_id); }
+  if (!onlyImage) for (const chunk of splitMessage(htmlToTelegram(a.body))) { const r = await send(owner(), chunk); if (r) draft.messageIds.push(r.message_id); }
   const r = await send(owner(), `Cosa faccio con «${esc(a.title)}»?\n\n<i>Per una correzione, rispondi qui con un messaggio (es. «accorcia l'intro e togli la parte sui costi»): riscrivo e ti rimando l'articolo.</i>`, { reply_markup: keyboard(draft) });
   if (r) draft.messageIds.push(r.message_id);
   saveState();
@@ -811,7 +856,7 @@ async function onCallback(cb) {
     if (action === 'img') {
       await answer('Nuova immagine…'); await send(chatId, '🖼 Genero una nuova copertina…');
       const nd = await regenerate(draft, { onlyImage: true });
-      return sendDraft(nd);
+      return sendDraft(nd, { onlyImage: true });
     }
     return answer('Azione sconosciuta');
   } catch (e) {
@@ -954,4 +999,4 @@ function init({ app, dataDir, adminAuth, publicUrl: pu }) {
   log(`pronto: ogni ${INTERVAL_DAYS} giorni alle ${SEND_HOUR}:00 ${TZ} · Telegram ${TOKEN() ? 'ok' : 'NO'} · FTP ${ftpConfigured() ? 'ok' : 'NO'} · immagini ${env('GEMINI_API_KEY') ? 'Gemini' : 'foto del sito'}${MOCK ? ' · MOCK' : ''}${DRY_RUN ? ' · DRY RUN' : ''}`);
 }
 
-module.exports = { init, statusText, createDraft, publish, renderArticle, renderCard, insertCard, updateSitemap, htmlToTelegram, parseSections, sanitizeBody, _state: () => state };
+module.exports = { init, statusText, createDraft, publish, renderArticle, renderCard, insertCard, updateSitemap, htmlToTelegram, parseSections, sanitizeBody, makeCover, buildImageSet, _state: () => state };
