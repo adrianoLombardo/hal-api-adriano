@@ -155,6 +155,7 @@ REGOLE FERREE
 - Lunghezza: 900-1300 parole. HTML consentito nel corpo: <p> <h2> <h3> <ul> <ol> <li> <strong> <em> <a> <blockquote>. Nessun <h1>, nessuna immagine, nessun <div>.
 - Link interni consentiti (usane 2-3, solo se pertinenti, con testo ancora naturale): ${SITE}/contact.html, ${SITE}/works.html, ${SITE}/case-studies.html, ${SITE}/neuro-flow.html, ${SITE}/brands.html e gli articoli già pubblicati qui sotto. Nessun altro link.
 - Il titolo (H1) è chiaro e specifico, 55-90 caratteri, senza clickbait, senza due punti doppi.
+- Ortografia italiana curata anche nei titoli e nei campi brevi: apostrofi ed elisioni corretti (un'installazione, l'evento, dell'opera, quest'anno), accenti corretti (è, perché, più).
 
 Articoli già pubblicati (non ripetere gli stessi contenuti; puoi linkarli):
 ${existing}
@@ -207,6 +208,9 @@ function articleFromSections(sec, topic) {
   const taken = new Set([...(topics().existing || []).map(e => e.url.replace(/^\/blog\//, '').replace(/\.html$/, '')), ...state.published.map(p => p.slug)]);
   if (taken.has(slug)) { let i = 2; while (taken.has(`${slug}-${i}`)) i++; slug = `${slug}-${i}`; }
   const tags = (sec.TAGS || topic.tags.join(', ')).split(/[,;\n]/).map(s => stripTags(s)).filter(Boolean).slice(0, 4);
+  // link all'articolo stesso (il modello a volte lo cita): tieni solo il testo
+  const selfLink = new RegExp(`<a href="[^"]*/blog/${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.html"[^>]*>([\\s\\S]*?)</a>`, 'gi');
+  const cleanBody = body.replace(selfLink, '$1');
   return {
     title,
     metaTitle: (stripTags(sec.META_TITLE) || title).slice(0, 70),
@@ -217,9 +221,9 @@ function articleFromSections(sec, topic) {
     tags: tags.length ? tags : topic.tags,
     imagePrompt: stripTags(sec.IMAGE_PROMPT || ''),
     imageAlt: stripTags(sec.IMAGE_ALT || topic.fallbackAlt || title).slice(0, 140),
-    body,
+    body: cleanBody,
     words,
-    minutes: readingMinutes(body),
+    minutes: readingMinutes(cleanBody),
   };
 }
 
@@ -280,23 +284,31 @@ async function imageModels(key) {
   return forced ? [forced, ...found.filter(m => m !== forced)] : found;
 }
 
+const badImageModel = {}; // modello → true (inesistente) | timestamp fine pausa (quota)
 async function geminiImage(prompt) {
   const key = env('GEMINI_API_KEY');
   if (!key) throw new Error('GEMINI_API_KEY assente');
   const fullPrompt = `${prompt}. Photorealistic editorial photograph, 16:9, dark environment, cyan and teal light with soft white highlights, cinematic contrast, shallow depth of field, high detail. No text, no letters, no watermark, no logo, no recognizable faces.`;
   const errors = [];
   for (const model of await imageModels(key)) {
+    const bad = badImageModel[model];
+    if (bad === true || (typeof bad === 'number' && bad > Date.now())) continue;
     for (const withRatio of [true, false]) {
       const body = { contents: [{ parts: [{ text: fullPrompt }] }], generationConfig: { responseModalities: ['IMAGE'] } };
       if (withRatio) body.generationConfig.imageConfig = { aspectRatio: '16:9' };
       let r;
       try {
         r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: 'POST', headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(150000) });
-      } catch (e) { errors.push(`${model}: ${e.message}`); break; }
+      } catch (e) { errors.push(`${model}: ${e.message}`); warn(`immagine ${model}: ${e.message}`); break; }
       if (!r.ok) {
-        const t = await r.text().catch(() => '');
-        errors.push(`${model}: ${r.status} ${t.slice(0, 160)}`);
+        const t = (await r.text().catch(() => '')).replace(/\s+/g, ' ');
+        let msg = t; try { msg = JSON.parse(t).error?.message || t; } catch (e) {}
+        errors.push(`${model}: ${r.status} ${msg.slice(0, 120)}`);
+        warn(`immagine ${model}: ${r.status} ${msg.slice(0, 400)}`);
         if (r.status === 400 && withRatio && /imageConfig|aspect/i.test(t)) continue; // riprova senza rapporto
+        if (r.status === 404 || (r.status === 400 && /not found|not supported|unsupported|does not exist/i.test(msg))) badImageModel[model] = true;
+        else if (r.status === 429) badImageModel[model] = Date.now() + (/limit(_value)?:\s*0\b|limit of 0\b/i.test(t) ? 24 * 3600 * 1000 : 10 * 60 * 1000);
+        else if (r.status >= 500) badImageModel[model] = Date.now() + 2 * 60 * 1000;
         break; // altro modello
       }
       const j = await r.json();
