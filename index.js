@@ -2054,6 +2054,10 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN
 try { blog.init({ app, dataDir: DATA_DIR, adminAuth, publicUrl: PUBLIC_URL }); }
 catch (e) { console.error('[BLOG] init fallita:', e.message); }
 
+/* Reel su Instagram e TikTok: promemoria con video e didascalie pronte (stesso bot del blog) */
+try { require('./social').init({ app, dataDir: DATA_DIR, adminAuth, blog }); }
+catch (e) { console.error('[SOCIAL] init fallita:', e.message); }
+
 /* ══════════════════════════════════════════════════
    START
    ──────────────────────────────────────────────── */

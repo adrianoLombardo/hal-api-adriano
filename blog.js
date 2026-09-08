@@ -812,6 +812,11 @@ async function handlePublish(draft, chatId) {
   }
 }
 
+/* Moduli che condividono questo bot (es. social.js): comandi e pulsanti propri, un solo polling */
+const modules = [];
+function registerModule(m) { modules.push(m); log(`modulo collegato: ${m.name} (${(m.commands || []).map(c => '/' + c).join(' ')})`); }
+const moduleHelp = () => modules.filter(m => m.help).map(m => '\n\n' + m.help).join('');
+
 const HELP = `Sono il bot del blog di adrianolombardo.art.
 Ogni ${INTERVAL_DAYS} giorni ti mando un articolo nuovo (testo + copertina) e lo pubblico solo quando premi «Pubblica».
 
@@ -831,16 +836,22 @@ async function onMessage(msg) {
   const text = String(msg.text || '').trim();
   if (!chatId) return;
   if (!owner()) {
-    if (/^\/start/.test(text)) { state.ownerChatId = chatId; if (!state.nextRunAt) state.nextRunAt = nextSlot(INTERVAL_DAYS); saveState(); log('proprietario collegato:', chatId); return send(chatId, `Ciao Adriano, collegato ✅\n\n${esc(HELP)}\n\nPrimo articolo automatico: ${fmtWhen(state.nextRunAt)}. Se vuoi vederne uno adesso: /nuovo`); }
+    if (/^\/start/.test(text)) { state.ownerChatId = chatId; if (!state.nextRunAt) state.nextRunAt = nextSlot(INTERVAL_DAYS); saveState(); log('proprietario collegato:', chatId); return send(chatId, `Ciao Adriano, collegato ✅\n\n${esc(HELP)}${moduleHelp()}\n\nPrimo articolo automatico: ${fmtWhen(state.nextRunAt)}. Se vuoi vederne uno adesso: /nuovo`); }
     return send(chatId, 'Questo bot è privato.');
   }
   if (chatId !== owner()) return send(chatId, 'Questo bot è privato.');
   const cmd = (/^\/([a-z]+)(?:@\w+)?\s*(.*)$/i.exec(text) || [])[1];
   const arg = (/^\/[a-z]+(?:@\w+)?\s*(.*)$/i.exec(text) || [])[2] || '';
   const pending = pendingDraft();
+  const lower = (cmd || '').toLowerCase();
+  const mod = modules.find(m => (m.commands || []).includes(lower));
+  if (mod) {
+    try { return await mod.onCommand(lower, arg, chatId); }
+    catch (e) { warn(`modulo ${mod.name}:`, e.message); return send(chatId, `❌ ${esc((e.message || '').slice(0, 300))}`); }
+  }
   try {
-    switch ((cmd || '').toLowerCase()) {
-      case 'start': case 'aiuto': case 'help': return send(chatId, esc(HELP));
+    switch (lower) {
+      case 'start': case 'aiuto': case 'help': return send(chatId, esc(HELP) + moduleHelp());
       case 'nuovo': case 'new':
         await send(chatId, `⏳ Preparo l'articolo${arg ? ' su «' + esc(arg) + '»' : ''}: testo e copertina richiedono 1-3 minuti…`);
         await createAndSend({ topicId: arg || null });
@@ -890,10 +901,18 @@ async function onMessage(msg) {
 
 async function onCallback(cb) {
   const chatId = cb.message && cb.message.chat && cb.message.chat.id;
-  const [action, id] = String(cb.data || '').split(':');
-  const draft = state.drafts[id];
+  const parts = String(cb.data || '').split(':');
   const answer = (text) => tg('answerCallbackQuery', { callback_query_id: cb.id, text: text || '' }).catch(() => {});
   if (!owner() || chatId !== owner()) return answer('Bot privato');
+  const mod = modules.find(m => (m.prefixes || []).includes(parts[0]));
+  if (mod) {
+    await answer('');
+    try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: cb.message.message_id, reply_markup: { inline_keyboard: [] } }); } catch (e) {}
+    try { return await mod.onCallback(parts[1], parts.slice(2).join(':'), cb); }
+    catch (e) { warn(`modulo ${mod.name}:`, e.message); return send(chatId, `❌ ${esc((e.message || '').slice(0, 300))}`); }
+  }
+  const [action, id] = parts;
+  const draft = state.drafts[id];
   if (!draft) return answer('Bozza non trovata (forse è vecchia)');
   try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: cb.message.message_id, reply_markup: { inline_keyboard: [] } }); } catch (e) {}
   try {
@@ -1059,4 +1078,4 @@ function init({ app, dataDir, adminAuth, publicUrl: pu }) {
   log(`pronto: ogni ${INTERVAL_DAYS} giorni alle ${SEND_HOUR}:00 ${TZ} · Telegram ${TOKEN() ? 'ok' : 'NO'} · FTP ${ftpConfigured() ? 'ok' : 'NO'} · immagini ${env('GEMINI_API_KEY') ? 'Gemini' : 'foto del sito'}${MOCK ? ' · MOCK' : ''}${DRY_RUN ? ' · DRY RUN' : ''}`);
 }
 
-module.exports = { init, statusText, createDraft, publish, renderArticle, renderCard, insertCard, updateSitemap, updateFeed, feedEntry, htmlToTelegram, parseSections, sanitizeBody, makeCover, buildImageSet, _state: () => state };
+module.exports = { init, statusText, registerModule, tg, send, owner, notifyOwner, createDraft, publish, renderArticle, renderCard, insertCard, updateSitemap, updateFeed, feedEntry, htmlToTelegram, parseSections, sanitizeBody, makeCover, buildImageSet, _state: () => state };
