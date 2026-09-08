@@ -1204,6 +1204,7 @@ app.post('/api/speak', async (req, res) => {
     if (mem0Prompt) extraDynamic += mem0Prompt;
     if (spotifyPrompt) extraDynamic += spotifyPrompt;
     extraDynamic += langInstruction(lang);
+    if (llm.isFree()) extraDynamic += '\n\nIMPORTANTE: NON usare i tag <think>. Rispondi direttamente, solo con il testo per il visitatore.';
 
     if (vision && vision.emotion) {
       extraDynamic += `\n\nCOSA STAI VEDENDO ORA (webcam):
@@ -1391,6 +1392,7 @@ DATI MONDO IN TEMPO REALE:
 </worldmap>`;
     }
     extraDynamic += langInstruction(lang);
+    if (llm.isFree()) extraDynamic += '\n\nIMPORTANTE: NON usare i tag <think>. Rispondi direttamente, solo con il testo per il visitatore.';
 
     const systemBlocks = buildSystemBlocks(lastMsg, sessionId, page, extraDynamic);
 
@@ -1501,7 +1503,18 @@ DATI MONDO IN TEMPO REALE:
     pending = '';
     if (inCmd && cmdBuf) handleCmd(cmdBuf);
 
-    const fullText = visible.trim();
+    let fullText = visible.trim();
+    if (!fullText && !clientGone) {
+      // Risposta vuota: riprova una volta senza catena di pensiero, in modo diretto
+      try {
+        const retryBlocks = systemBlocks.concat([{ type: 'text', text: '\n\nIMPORTANTE: rispondi ORA, direttamente, senza tag <think> né <cmd>: solo il testo per il visitatore (2-4 frasi).' }]);
+        const retry = await llm.complete({ system: retryBlocks, messages: normalizeMessages(messages), maxTokens: 500, timeoutMs: 30000 });
+        const t = String(retry.text || '').replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<cmd>[\s\S]*?<\/cmd>/g, '').trim();
+        console.warn(`[STREAM] risposta vuota da ${claudeRes.provider}/${claudeRes.model}: secondo tentativo ${t ? 'ok' : 'vuoto'} (${retry.provider}/${retry.model})`);
+        if (t) emitVisible(t);
+      } catch (e) { console.warn('[STREAM] secondo tentativo fallito:', (e.message || '').slice(0, 160)); }
+      fullText = visible.trim();
+    }
     const t2 = Date.now();
     console.log(`[STREAM] Claude: "${fullText.substring(0, 50)}..." (pre ${tPre - t1}ms, primo token ${firstTokenAt ? firstTokenAt - t1 : '-'}ms, totale ${t2 - t1}ms)`);
 
