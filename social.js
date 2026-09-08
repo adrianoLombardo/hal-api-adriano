@@ -13,6 +13,9 @@
 const fs = require('fs');
 const path = require('path');
 
+const ig = require('./publish-ig');
+const tiktok = require('./publish-tiktok');
+
 const env = (k, d = '') => (process.env[k] || d).trim();
 const TZ = 'Europe/Rome';
 const PLAN_FILE = path.join(__dirname, 'social-plan.json');
@@ -81,11 +84,40 @@ const slotMs = (it) => it.date ? atRome(it.date, 18, 30) : null;
 const tiktokMs = (it) => it.date ? atRome(it.date, 20, 0) : null;
 
 function keyboard(it) {
-  return { inline_keyboard: [
-    [{ text: '✅ Pubblicato su Instagram', callback_data: `rl:ig:${it.id}` }],
-    [{ text: '🎵 Pubblicato su TikTok', callback_data: `rl:tt:${it.id}` }],
-    [{ text: '⏭ Rimanda di 3 giorni', callback_data: `rl:pp:${it.id}` }],
-  ] };
+  const rows = [];
+  if (ig.configured()) rows.push([{ text: '🚀 Pubblica su Instagram', callback_data: `rl:pig:${it.id}` }]);
+  else rows.push([{ text: '✅ Pubblicato su Instagram', callback_data: `rl:ig:${it.id}` }]);
+  if (tiktok.configured()) rows.push([{ text: tiktok.direct() ? '🚀 Pubblica su TikTok' : '📥 Manda a TikTok (bozza)', callback_data: `rl:ptt:${it.id}` }]);
+  else rows.push([{ text: '🎵 Pubblicato su TikTok', callback_data: `rl:tt:${it.id}` }]);
+  rows.push([{ text: '⏭ Rimanda di 3 giorni', callback_data: `rl:pp:${it.id}` }]);
+  if (ig.configured()) rows.push([{ text: '✍️ L\'ho pubblicato a mano', callback_data: `rl:ig:${it.id}` }]);
+  return { inline_keyboard: rows };
+}
+
+/* ── pubblicazione vera ── */
+async function doPublishInstagram(it, chatId) {
+  const send = (t) => bot.send(chatId, t);
+  await send(`🚀 Pubblico il reel ${it.reel} su Instagram. Il caricamento richiede uno o due minuti…`);
+  const r = await ig.publishReel({
+    videoUrl: it.video, caption: igFull(it), coverUrl: it.cover, shareToFeed: true,
+    onProgress: (st) => log(`reel ${it.id}: ${st}`),
+  });
+  const d = state.done[it.id] || {}; d.instagram = Date.now(); d.instagramId = r.id; d.permalink = r.permalink || null;
+  state.done[it.id] = d; saveState();
+  const next = items().find(x => !isDone(x.id));
+  await send(`✅ <b>Pubblicato su Instagram</b>${r.permalink ? `\n${r.permalink}` : ''}\n\nRicordati della copertina: in Instagram puoi cambiarla dal fotogramma a ${esc(coverTime(it) || '—')}.${next ? `\nProssimo: reel ${next.reel} · ${esc(next.title)} — ${esc(dateIt(next.date))}.` : ''}`);
+  if (tiktok.configured()) await send('Alle 20:00 ti ricordo TikTok, oppure premi ora il pulsante di TikTok qui sopra.');
+}
+
+async function doPublishTikTok(it, chatId) {
+  const send = (t) => bot.send(chatId, t);
+  await send(`${tiktok.direct() ? '🚀 Pubblico' : '📥 Mando'} il reel ${it.reel} su TikTok…`);
+  const r = await tiktok.sendVideo({ videoUrl: it.video, title: it.tiktok, onProgress: (st) => log(`reel ${it.id} tiktok: ${st}`) });
+  const d = state.done[it.id] || {}; d.tiktok = Date.now(); d.tiktokId = r.publish_id; if (!d.instagram) d.instagram = Date.now();
+  state.done[it.id] = d; saveState();
+  await send(r.mode === 'bozza'
+    ? `📥 <b>Video su TikTok</b>, nelle bozze.\nApri l'app TikTok → notifiche o bozze → aggiungi la didascalia (te l'ho mandata sopra) e pubblica.`
+    : `✅ <b>Pubblicato su TikTok</b> (id ${esc(r.publish_id)}).`);
 }
 
 /* ── invio del pacchetto ── */
@@ -109,7 +141,8 @@ async function sendPackage(it, chatId, { manual = false } = {}) {
     if (it.alt) extra += `\n\n♿ <b>Testo alternativo</b> (Instagram → Impostazioni avanzate)\n${pre(it.alt)}`;
     if (it.english) extra += `\n\n🇬🇧 <i>Versione inglese, se la vuoi aggiungere:</i>\n${pre(it.english)}`;
     await bot.send(to, extra);
-    await bot.send(to, `Quando l'hai pubblicato, segnalo qui sotto.${manual ? '' : '\n<i>Promemoria automatico: mancano 30 minuti allo slot.</i>'}`, { reply_markup: keyboard(it) });
+    const auto = ig.configured() || tiktok.configured();
+    await bot.send(to, `${auto ? 'Premi qui sotto e pubblico io.' : "Quando l'hai pubblicato, segnalo qui sotto."}${manual ? '' : '\n<i>Promemoria automatico: mancano 30 minuti allo slot.</i>'}`, { reply_markup: keyboard(it) });
     if (!manual) { state.sent[it.id] = Date.now(); saveState(); }
     log(`pacchetto inviato: reel ${it.id} (${it.title})`);
   } finally { busy = false; }
@@ -155,6 +188,7 @@ function statusText() {
     pub.length ? `Già pubblicati a mano: ${pub.join(', ')}` : '',
     held.length ? `In attesa (non opere): ${held.join(' · ')} — /reel <numero> per mandarne uno` : '',
     '',
+    `Pubblicazione: Instagram ${ig.configured() ? 'automatica' : 'a mano'} · TikTok ${tiktok.configured() ? (tiktok.direct() ? 'automatica' : 'in bozza') : 'a mano'}`,
     'Legenda: • in attesa · 📤 inviato · 📸 su Instagram · ✅ anche su TikTok',
   ].filter(Boolean).join('\n');
 }
@@ -162,7 +196,9 @@ function statusText() {
 const HELP = `Reel (Instagram e TikTok):
 /reel — manda subito il prossimo pacchetto (anche: /reel 3)
 /reels — calendario e stato
-/pubblicato 3 — segna il reel 3 come pubblicato
+/pubblicareel 3 — pubblica subito il reel 3 su Instagram
+/social — stato dei collegamenti Instagram e TikTok
+/pubblicato 3 — segna il reel 3 come pubblicato (se l'hai fatto a mano)
 /rimanda 3 — sposta il reel 3 di 3 giorni
 /reelpausa e /reelriprendi — ferma o riattiva i promemoria`;
 
@@ -199,6 +235,24 @@ async function onCommand(cmd, arg, chatId) {
       delete state.sent[it.id]; saveState();
       return send(`⏭ Reel ${it.reel} spostato a ${esc(dateIt(state.postponed[it.id]))}.`);
     }
+    case 'pubblicareel': {
+      const it = findReel(arg) || items().find(x => !isDone(x.id));
+      if (!it) return send('Quale reel? Esempio: /pubblicareel 3');
+      if (!ig.configured()) return send('Instagram non è ancora collegato: /social per lo stato.');
+      return doPublishInstagram(it, chatId);
+    }
+    case 'social': {
+      const righe = ['<b>Collegamenti social</b>'];
+      if (ig.configured()) {
+        try { const m = await ig.me(); righe.push(`📸 Instagram: collegato come @${esc(m.username || m.id)} (${esc(ig.host())})`); }
+        catch (e) { righe.push(`📸 Instagram: token NON valido — ${esc((e.message || '').slice(0, 160))}`); }
+      } else righe.push('📸 Instagram: non configurato (IG_USER_ID, IG_ACCESS_TOKEN)');
+      if (tiktok.configured()) {
+        try { const m = await tiktok.me(); righe.push(`🎵 TikTok: collegato come ${esc(m.display_name || m.open_id || '?')} — modalità ${tiktok.direct() ? 'pubblicazione diretta' : 'bozza'}`); }
+        catch (e) { righe.push(`🎵 TikTok: token NON valido — ${esc((e.message || '').slice(0, 160))}`); }
+      } else righe.push('🎵 TikTok: non configurato (TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REFRESH_TOKEN)');
+      return send(righe.join('\n'));
+    }
     case 'reelpausa': state.paused = true; saveState(); return send('Promemoria dei reel in pausa. /reelriprendi per riattivarli.');
     case 'reelriprendi': state.paused = false; saveState(); return send('Promemoria dei reel riattivati.');
   }
@@ -219,6 +273,15 @@ async function onCallback(action, id, cb) {
     state.done[it.id] = d; saveState();
     return bot.send(chatId, `🎵 Reel ${it.reel} segnato anche su TikTok. ${items().filter(x => !isDone(x.id)).length} reel ancora in calendario.`);
   }
+  if (action === 'pig') {
+    if (isDone(it.id) && d.instagramId) return bot.send(chatId, `Il reel ${it.reel} è già stato pubblicato${d.permalink ? ': ' + d.permalink : ''}.`);
+    try { return await doPublishInstagram(it, chatId); }
+    catch (e) { warn('pubblicazione IG:', e.message); return bot.send(chatId, `❌ Instagram non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>\n\nPuoi pubblicarlo a mano dal telefono e premere «L'ho pubblicato a mano».`); }
+  }
+  if (action === 'ptt') {
+    try { return await doPublishTikTok(it, chatId); }
+    catch (e) { warn('pubblicazione TikTok:', e.message); return bot.send(chatId, `❌ TikTok non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>`); }
+  }
   if (action === 'pp') {
     if (!it.date) return bot.send(chatId, 'Questo reel non è in calendario.');
     state.postponed[it.id] = addDays(state.postponed[it.id] || it.date, 3);
@@ -237,7 +300,7 @@ function init({ app, dataDir, adminAuth, blog }) {
 
   bot.registerModule({
     name: 'social',
-    commands: ['reel', 'reels', 'pubblicato', 'rimanda', 'reelpausa', 'reelriprendi'],
+    commands: ['reel', 'reels', 'pubblicato', 'rimanda', 'reelpausa', 'reelriprendi', 'pubblicareel', 'social'],
     prefixes: ['rl'],
     help: HELP,
     onCommand,
