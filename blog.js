@@ -391,7 +391,7 @@ async function buildImageSet(buffer, slug) {
 }
 
 async function makeCover(article, topic) {
-  if (!MOCK) {
+  if (!MOCK && topic.cover !== 'site') {
     const prompt = article.imagePrompt || topic.title;
     const providers = [];
     const order = env('BLOG_IMAGE_PROVIDERS', 'gemini,huggingface,pollinations').split(',').map(x => x.trim().toLowerCase());
@@ -412,7 +412,8 @@ async function makeCover(article, topic) {
   }
   const src = topic.fallback || '/img/interconnection/1.jpg';
   const b = src.replace(/\.jpg$/, '');
-  return { kind: 'fallback', src, srcset: `${b}-480.webp 480w, ${b}-1024.webp 1024w`, og: topic.fallbackOg || `${b}-og.jpg`, files: [], preview: null, alt: topic.fallbackAlt || article.imageAlt, model: 'foto del sito' };
+  if (topic.cover === 'site') log(`copertina: foto dell'opera ${src} (argomento legato a un'opera reale)`);
+  return { kind: 'fallback', src, srcset: `${b}-480.webp 480w, ${b}-1024.webp 1024w`, og: topic.fallbackOg || `${b}-og.jpg`, files: [], preview: null, alt: topic.fallbackAlt || article.imageAlt, model: topic.cover === 'site' ? "foto dell'opera" : 'foto del sito' };
 }
 
 /* ══════════════════════════════════════════════════
@@ -720,7 +721,7 @@ function keyboard(draft) {
 async function sendDraft(draft, { onlyImage = false } = {}) {
   const a = draft.article, img = draft.image;
   const previewUrl = publicUrl ? `${publicUrl}/api/blog/preview/${draft.id}` : '';
-  const caption = `📝 <b>Articolo proposto per il blog</b>\n\n<b>${esc(a.title)}</b>\n${esc(a.excerpt)}\n\n✍️ ${esc(FORMATS[formatOf(a.format)].label)} · ⏱ ${a.minutes} min · ${a.words} parole · 🏷 ${esc(a.tags.join(', '))}\n🖼 Copertina: ${esc(img.kind === 'gemini' ? 'generata con ' + img.model : 'foto del sito (' + img.src + ')')}\n🤖 Testo: ${esc(a.model || '-')}${previewUrl ? `\n\n🔗 <a href="${previewUrl}">Anteprima con lo stile del sito</a>` : ''}`;
+  const caption = `📝 <b>Articolo proposto per il blog</b>\n\n<b>${esc(a.title)}</b>\n${esc(a.excerpt)}\n\n✍️ ${esc(FORMATS[formatOf(a.format)].label)} · ⏱ ${a.minutes} min · ${a.words} parole · 🏷 ${esc(a.tags.join(', '))}\n🖼 Copertina: ${esc(img.kind === 'gemini' ? 'generata con ' + img.model : img.model + ' (' + img.src + ')')}\n🤖 Testo: ${esc(a.model || '-')}${previewUrl ? `\n\n🔗 <a href="${previewUrl}">Anteprima con lo stile del sito</a>` : ''}`;
   let m;
   if (img.preview && fs.existsSync(img.preview)) m = await tg('sendPhoto', { chat_id: owner(), caption, parse_mode: 'HTML' }, { photo: { path: img.preview, type: 'image/jpeg', name: 'cover.jpg' } });
   else m = await tg('sendPhoto', { chat_id: owner(), photo: SITE + img.src, caption, parse_mode: 'HTML' }).catch(() => send(owner(), caption));
@@ -860,6 +861,20 @@ async function onMessage(msg) {
         if (cmd) return send(chatId, 'Comando sconosciuto. /aiuto');
         if (!text) return;
         if (!pending) return send(chatId, 'Nessuna bozza in attesa a cui applicare la correzione. Usa /nuovo per un articolo nuovo.');
+        if (/^genera (l'|la |un'|una )?(immagine|copertina|foto)/i.test(text)) {
+          await send(chatId, '🖼 Genero una copertina per questo articolo…');
+          const tp = Object.assign({}, topics().topics.find(t => t.id === pending.topicId) || {}, { cover: 'generate' });
+          if (busy) throw new Error('operazione già in corso');
+          busy = true;
+          let nd;
+          try {
+            const image = await makeCover(pending.article, tp);
+            nd = { ...pending, id: crypto.randomBytes(8).toString('hex'), image, createdAt: Date.now(), status: 'pending', messageIds: [], version: (pending.version || 1) + 1 };
+            pending.status = 'superseded'; state.drafts[nd.id] = nd; saveState();
+          } finally { busy = false; }
+          await sendDraft(nd, { onlyImage: true });
+          return;
+        }
         await send(chatId, `✏️ Riscrivo «${esc(pending.article.title)}» con la tua correzione: «${esc(text)}». Un minuto…`);
         { const nd = await regenerate(pending, { feedback: text }); await sendDraft(nd); }
         return;
@@ -894,6 +909,8 @@ async function onCallback(cb) {
       return sendDraft(nd);
     }
     if (action === 'img') {
+      const tp = topics().topics.find(t => t.id === draft.topicId);
+      if (tp && tp.cover === 'site') { await answer('Foto dell\'opera'); return send(chatId, `Questo articolo usa la foto vera dell'opera (${esc(tp.fallback)}), come hai chiesto. Se vuoi un'immagine generata, rispondi con «genera l'immagine».`); }
       await answer('Nuova immagine…'); await send(chatId, '🖼 Genero una nuova copertina…');
       const nd = await regenerate(draft, { onlyImage: true });
       return sendDraft(nd, { onlyImage: true });

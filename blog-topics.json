@@ -1,5 +1,5 @@
 {
-  "note": "Argomenti a rotazione per il blog automatico. `format`: guida (pratico), opera (racconto di un'opera), riflessione (saggio artistico), ricerca (diario Neuro.Flow), percorso (storia personale). Il server alterna i formati e segna gli usati in blog-state.json. Ogni voce: titolo di lavoro, angolo, tag, parole chiave SEO, copertina di riserva (immagine del sito con varianti -480/-1024/-og) se i generatori non producono l'immagine.",
+  "note": "Argomenti a rotazione per il blog automatico. `format`: guida (pratico), opera (racconto di un'opera), riflessione (saggio artistico), ricerca (diario Neuro.Flow), percorso (storia personale). Il server alterna i formati e segna gli usati in blog-state.json. Ogni voce: titolo di lavoro, angolo, tag, parole chiave SEO, copertina di riserva (immagine del sito con varianti -480/-1024/-og) se i generatori non producono l'immagine. `cover: \"site\"` = usa direttamente la foto dell'opera (fallback) senza generare immagini: voluto da Adriano per gli articoli legati a opere reali.",
   "topics": [
     { "id": "brief-installazione",
       "title": "Come scrivere il brief per un'installazione immersiva: le 12 informazioni che fanno risparmiare settimane",
@@ -63,9 +63,11 @@
         "Neuro.Flow"
       ],
       "keywords": "headset eeg muse cosa misura, eeg arte, onde cerebrali installazione",
-      "fallback": "/img/animus/cover.jpg",
-      "fallbackAlt": "Animus et Corpus, installazione EEG al Bright Festival",
-      "format": "ricerca"
+      "fallback": "/img/animus/5.jpg",
+      "fallbackAlt": "Headset EEG durante Animus et Corpus",
+      "format": "ricerca",
+      "fallbackOg": "/img/animus/5.jpg",
+      "cover": "site"
     },
     { "id": "sincronia-due-cervelli",
       "title": "Due cervelli si sincronizzano davvero? Il Phase Locking Value spiegato senza formule",
@@ -76,9 +78,11 @@
         "Ricerca"
       ],
       "keywords": "phase locking value spiegato, sincronia cerebrale, hyperscanning arte",
-      "fallback": "/img/animus/cover.jpg",
-      "fallbackAlt": "Neuro.Flow, due partecipanti con headset EEG e sfera proiettata",
-      "format": "ricerca"
+      "fallback": "/img/animus/3.jpg",
+      "fallbackAlt": "Neuro.Flow, sfera proiettata che reagisce alla sincronia cerebrale",
+      "format": "ricerca",
+      "fallbackOg": "/img/animus/3.jpg",
+      "cover": "site"
     },
     { "id": "mapping-architetturale",
       "title": "Projection mapping su un edificio: le 7 cose da controllare prima di dire sì",
@@ -156,9 +160,11 @@
         "Opere"
       ],
       "keywords": "installazione fili luce uv, string art luce ultravioletta, architettura di luce",
-      "fallback": "/img/cathedral/1.jpg",
-      "fallbackAlt": "The Cathedral, archi di fili fluorescenti sotto luce UV",
-      "format": "opera"
+      "fallback": "/img/cathedral/2.jpg",
+      "fallbackAlt": "The Cathedral, fili tesi e luce UV nel buio",
+      "format": "opera",
+      "fallbackOg": "/img/cathedral/2.jpg",
+      "cover": "site"
     },
     { "id": "musei-interattivi",
       "title": "Installazioni interattive nei musei: cosa funziona con il pubblico e cosa resta spento",
@@ -223,9 +229,11 @@
         "Tecnica"
       ],
       "keywords": "installazione partecipativa smartphone, qr code installazione interattiva, web app evento",
-      "fallback": "/img/liquid/cover.jpg",
-      "fallbackAlt": "Liquid Thoughts, partecipazione dal telefono tramite QR",
-      "format": "opera"
+      "fallback": "/img/liquid/1.jpg",
+      "fallbackAlt": "Liquid Thoughts, il pubblico partecipa dal telefono tramite QR",
+      "format": "opera",
+      "fallbackOg": "/img/liquid/1-og.jpg",
+      "cover": "site"
     },
     { "id": "errori-primo-progetto",
       "title": "I 10 errori che vedo più spesso nel primo progetto immersivo di un brand",
@@ -275,9 +283,11 @@
         "Collaborazioni"
       ],
       "keywords": "collaborazione arte scienza, art science project, ricerca universitaria arte digitale",
-      "fallback": "/img/animus/cover.jpg",
+      "fallback": "/img/animus/6.jpg",
       "fallbackAlt": "Neuro.Flow, ricerca aperta tra arte e neuroscienze",
-      "format": "ricerca"
+      "format": "ricerca",
+      "fallbackOg": "/img/animus/6.jpg",
+      "cover": "site"
     },
     { "id": "luce-emozione",
       "title": "Perché la luce ci emoziona: tre cose che ho imparato accendendo spazi per dieci anni",
@@ -356,7 +366,9 @@
       ],
       "keywords": "the cathedral installazione fili luce uv, string art installazione, architettura di luce",
       "fallback": "/img/cathedral/1.jpg",
-      "fallbackAlt": "The Cathedral, archi di fili fluorescenti sotto luce UV"
+      "fallbackAlt": "The Cathedral, archi di fili fluorescenti sotto luce UV",
+      "fallbackOg": "/img/cathedral/1-og.jpg",
+      "cover": "site"
     },
     { "id": "san-salvador-notte",
       "format": "opera",
@@ -369,7 +381,9 @@
       ],
       "keywords": "murales luce uv, street art fili fluorescenti, san salvador installazione",
       "fallback": "/img/sansalvador/cover.jpg",
-      "fallbackAlt": "San Salvador, murales con fili fluorescenti e luce UV"
+      "fallbackAlt": "San Salvador, murales con fili fluorescenti e luce UV",
+      "fallbackOg": "/img/sansalvador/cover-og.jpg",
+      "cover": "site"
     },
     { "id": "interconnection-600",
       "format": "opera",
@@ -382,7 +396,9 @@
       ],
       "keywords": "interconnection installazione immersiva, holy club gallery, spazio immersivo 600 mq",
       "fallback": "/img/interconnection/1.jpg",
-      "fallbackAlt": "Interconnection, installazione immersiva audio video luce"
+      "fallbackAlt": "Interconnection, installazione immersiva alla Holy Club Gallery",
+      "fallbackOg": "/img/interconnection/1-og.jpg",
+      "cover": "site"
     },
     { "id": "animus-backstage",
       "format": "opera",
@@ -395,7 +411,9 @@
       ],
       "keywords": "animus et corpus bright festival, installazione eeg backstage, arte onde cerebrali dal vivo",
       "fallback": "/img/animus/cover.jpg",
-      "fallbackAlt": "Animus et Corpus, installazione EEG al Bright Festival"
+      "fallbackAlt": "Animus et Corpus al Bright Festival 2025, installazione EEG",
+      "fallbackOg": "/img/animus/cover-og.jpg",
+      "cover": "site"
     },
     { "id": "neuroflow-diario-1",
       "format": "ricerca",
@@ -407,8 +425,10 @@
         "EEG"
       ],
       "keywords": "neuro flow ricerca sincronia cerebrale, hyperscanning arte, diario di ricerca artista",
-      "fallback": "/img/animus/cover.jpg",
-      "fallbackAlt": "Neuro.Flow, due partecipanti con headset EEG"
+      "fallback": "/img/animus/2.jpg",
+      "fallbackAlt": "Neuro.Flow, due partecipanti con headset EEG",
+      "fallbackOg": "/img/animus/2.jpg",
+      "cover": "site"
     },
     { "id": "sincronia-intimita",
       "format": "riflessione",
@@ -420,8 +440,10 @@
         "Percezione"
       ],
       "keywords": "sincronia tra persone arte, intimità e tecnologia, arte relazionale eeg",
-      "fallback": "/img/animus/cover.jpg",
-      "fallbackAlt": "Sfera proiettata che reagisce alla sincronia di due cervelli"
+      "fallback": "/img/animus/4.jpg",
+      "fallbackAlt": "Neuro.Flow, due persone allineate attraverso la luce",
+      "fallbackOg": "/img/animus/4.jpg",
+      "cover": "site"
     },
     { "id": "corpo-interfaccia",
       "format": "riflessione",
@@ -473,7 +495,9 @@
       ],
       "keywords": "liquid thoughts installazione partecipativa, arte partecipativa smartphone, opera collettiva qr",
       "fallback": "/img/liquid/cover.jpg",
-      "fallbackAlt": "Liquid Thoughts, partecipazione dal telefono tramite QR"
+      "fallbackAlt": "Liquid Thoughts, grafica generativa e partecipazione dal telefono",
+      "fallbackOg": "/img/liquid/cover-og.jpg",
+      "cover": "site"
     },
     { "id": "sailing-memorie",
       "format": "opera",
@@ -486,7 +510,9 @@
       ],
       "keywords": "sailing through memories installazione, memorie condivise arte, opera partecipativa web",
       "fallback": "/img/sailing/cover.jpg",
-      "fallbackAlt": "Sailing Through Memories, memorie proiettate"
+      "fallbackAlt": "Sailing Through Memories, memorie proiettate",
+      "fallbackOg": "/img/sailing/cover-og.jpg",
+      "cover": "site"
     },
     { "id": "maestri-luce",
       "format": "riflessione",
@@ -537,8 +563,10 @@
         "Opere"
       ],
       "keywords": "come nasce un'installazione artistica, processo creativo light art, metodo artista digitale",
-      "fallback": "/img/sansalvador/cover.jpg",
-      "fallbackAlt": "Lavoro manuale sui fili fluorescenti"
+      "fallback": "/img/cathedral/3.jpg",
+      "fallbackAlt": "The Cathedral, lavoro sui fili",
+      "fallbackOg": "/img/cathedral/3.jpg",
+      "cover": "site"
     },
     { "id": "esporre-luoghi",
       "format": "percorso",
@@ -550,8 +578,10 @@
         "Opere"
       ],
       "keywords": "esporre installazioni luce musei, biennale di firenze installazione, art dubai artista italiano",
-      "fallback": "/img/interconnection/1.jpg",
-      "fallbackAlt": "Installazione immersiva in uno spazio espositivo"
+      "fallback": "/img/sansalvador/1.jpg",
+      "fallbackAlt": "San Salvador, installazione nello spazio pubblico",
+      "fallbackOg": "/img/sansalvador/1-og.jpg",
+      "cover": "site"
     }
   ],
   "existing": [
