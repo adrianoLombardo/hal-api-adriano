@@ -400,20 +400,23 @@ async function makeCover(article, topic) {
       if (name === 'huggingface' && env('HF_TOKEN')) providers.push(['Hugging Face', () => hfImage(prompt)]);
       if (name === 'pollinations') providers.push(['Pollinations', () => pollinationsImage(prompt)]);
     }
-    for (const [label, fn] of providers) {
-      try {
-        const g = await fn();
-        const set = await buildImageSet(g.buffer, article.slug);
-        log(`copertina generata con ${g.model} (${g.buffer.length} byte)`);
-        return Object.assign(set, { kind: 'gemini', model: g.model, alt: article.imageAlt });
-      } catch (e) { warn(`copertina ${label} fallita:`, (e.message || '').slice(0, 300)); state.lastError = 'immagine: ' + (e.message || '').slice(0, 200); }
+    for (let round = 1; round <= 2; round++) {
+      if (round === 2) { warn('generatori di immagini non disponibili, secondo tentativo tra 20 s'); await new Promise(r => setTimeout(r, 20000)); }
+      for (const [label, fn] of providers) {
+        try {
+          const g = await fn();
+          const set = await buildImageSet(g.buffer, article.slug);
+          log(`copertina generata con ${g.model} (${g.buffer.length} byte)`);
+          return Object.assign(set, { kind: 'gemini', model: g.model, alt: article.imageAlt });
+        } catch (e) { warn(`copertina ${label} fallita:`, (e.message || '').slice(0, 300)); state.lastError = 'immagine: ' + (e.message || '').slice(0, 200); }
+      }
     }
     warn('nessun generatore di immagini disponibile, uso una foto del sito');
   }
   const src = topic.fallback || '/img/interconnection/1.jpg';
   const b = src.replace(/\.jpg$/, '');
   if (topic.cover === 'site') log(`copertina: foto dell'opera ${src} (argomento legato a un'opera reale)`);
-  return { kind: 'fallback', src, srcset: `${b}-480.webp 480w, ${b}-1024.webp 1024w`, og: topic.fallbackOg || `${b}-og.jpg`, files: [], preview: null, alt: topic.fallbackAlt || article.imageAlt, model: topic.cover === 'site' ? "foto dell'opera" : 'foto del sito' };
+  return { kind: 'fallback', src, srcset: `${b}-480.webp 480w, ${b}-1024.webp 1024w`, og: topic.fallbackOg || `${b}-og.jpg`, files: [], preview: null, alt: topic.fallbackAlt || article.imageAlt, model: topic.cover === 'site' ? "foto dell'opera" : 'foto del sito', ripiego: topic.cover !== 'site' && !MOCK };
 }
 
 /* ══════════════════════════════════════════════════
@@ -721,7 +724,7 @@ function keyboard(draft) {
 async function sendDraft(draft, { onlyImage = false } = {}) {
   const a = draft.article, img = draft.image;
   const previewUrl = publicUrl ? `${publicUrl}/api/blog/preview/${draft.id}` : '';
-  const caption = `📝 <b>Articolo proposto per il blog</b>\n\n<b>${esc(a.title)}</b>\n${esc(a.excerpt)}\n\n✍️ ${esc(FORMATS[formatOf(a.format)].label)} · ⏱ ${a.minutes} min · ${a.words} parole · 🏷 ${esc(a.tags.join(', '))}\n🖼 Copertina: ${esc(img.kind === 'gemini' ? 'generata con ' + img.model : img.model + ' (' + img.src + ')')}\n🤖 Testo: ${esc(a.model || '-')}${previewUrl ? `\n\n🔗 <a href="${previewUrl}">Anteprima con lo stile del sito</a>` : ''}`;
+  const caption = `📝 <b>Articolo proposto per il blog</b>\n\n<b>${esc(a.title)}</b>\n${esc(a.excerpt)}\n\n✍️ ${esc(FORMATS[formatOf(a.format)].label)} · ⏱ ${a.minutes} min · ${a.words} parole · 🏷 ${esc(a.tags.join(', '))}\n🖼 Copertina: ${esc(img.kind === 'gemini' ? 'generata con ' + img.model : img.model + ' (' + img.src + ')')}${img.ripiego ? '\n⚠️ I generatori di immagini non hanno risposto: per ora una foto del sito. Ripremi «Nuova immagine» tra un minuto per una copertina dedicata.' : ''}\n🤖 Testo: ${esc(a.model || '-')}${previewUrl ? `\n\n🔗 <a href="${previewUrl}">Anteprima con lo stile del sito</a>` : ''}`;
   let m;
   if (img.preview && fs.existsSync(img.preview)) m = await tg('sendPhoto', { chat_id: owner(), caption, parse_mode: 'HTML' }, { photo: { path: img.preview, type: 'image/jpeg', name: 'cover.jpg' } });
   else m = await tg('sendPhoto', { chat_id: owner(), photo: SITE + img.src, caption, parse_mode: 'HTML' }).catch(() => send(owner(), caption));
