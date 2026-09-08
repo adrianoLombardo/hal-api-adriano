@@ -20,6 +20,8 @@ const cors    = require('cors');
 const path    = require('path');
 const fs      = require('fs');
 const WebSocket = require('ws');
+const crypto  = require('crypto');
+const tts     = require('./tts');
 
 // Consciousness modules
 let halMind = null;
@@ -69,20 +71,31 @@ try {
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+process.on('unhandledRejection', (e) => console.error('[PROCESS] unhandledRejection:', (e && e.stack) || e));
+process.on('uncaughtException',  (e) => console.error('[PROCESS] uncaughtException:', (e && e.stack) || e));
+
+const ALLOWED_ORIGINS = ['http://localhost:3000', 'http://localhost:8000', 'http://127.0.0.1:3000', 'https://adrianolombardo.art', 'https://www.adrianolombardo.art'];
+const isAllowedOrigin = (origin) => !origin || ALLOWED_ORIGINS.includes(origin);
 app.use(cors({
-  origin: function (origin, cb) {
-    // Allow: our domains, localhost, file:// (origin === null/undefined), and admin dashboard
-    const allowed = ['http://localhost:3000', 'http://localhost:8000', 'https://adrianolombardo.art', 'https://www.adrianolombardo.art'];
-    if (!origin || allowed.includes(origin)) return cb(null, true);
-    cb(null, false);
-  },
+  origin: function (origin, cb) { cb(null, isAllowedOrigin(origin)); },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'x-session-id', 'x-visitor-id', 'x-admin-password'],
 }));
 app.use(express.json({ limit: '1mb' }));
-app.use(express.static(path.join(__dirname, '..')));
 
-// ── Spotify routes ──
-if (spotify) app.use('/api/spotify', spotify.router);
+// Sito statico SOLO in locale (index.html accanto a server/). Su Railway il filesystem del container NON va servito.
+const SITE_DIR = path.join(__dirname, '..');
+if (!process.env.RAILWAY_ENVIRONMENT && fs.existsSync(path.join(SITE_DIR, 'index.html'))) {
+  app.use('/server', (req, res) => res.status(404).end()); // mai esporre il backend e i suoi JSON
+  app.use(express.static(SITE_DIR, { dotfiles: 'ignore' }));
+  console.log('[BOOT] Sito statico servito da', SITE_DIR);
+}
+
+// ── Spotify routes (token e playlist solo con password admin) ──
+if (spotify) {
+  const SPOTIFY_PROTECTED = /^\/(token|devices|transfer|recently-played|playlists|playlist(\/.*)?|queue)$/;
+  app.use('/api/spotify', (req, res, next) => (SPOTIFY_PROTECTED.test(req.path) && req.method !== 'OPTIONS') ? adminAuth(req, res, next) : next(), spotify.router);
+}
 
 /* ══════════════════════════════════════════════════
    CONFIG
@@ -92,6 +105,32 @@ const EL_VOICE   = () => (process.env.ELEVENLABS_VOICE_ID || 'q2LDrL29FLqRR3XanH
 const EL_FORMAT  = () => (process.env.ELEVENLABS_FORMAT || 'mp3_44100_128').trim();
 const ANTH_KEY   = () => (process.env.ANTHROPIC_API_KEY || '').trim();
 const ADMIN_PWD  = () => (process.env.HAL_ADMIN_PASSWORD || 'hal9000admin').trim();
+
+/* ── Helpers condivisi dagli endpoint chat ── */
+const withTimeout = (p, ms, fallback) => Promise.race([
+  Promise.resolve(p).catch(() => fallback),
+  new Promise(r => setTimeout(() => r(fallback), ms)),
+]);
+const safeStr  = (v, n = 120) => String(v == null ? '' : v).replace(/[<>]/g, '').slice(0, n);
+const safePage = (p) => (String(p || 'home').replace(/[^a-z0-9\-\/_.]/gi, '').slice(0, 40) || 'home');
+// Anthropic vuole ruoli alternati e primo messaggio "user": normalizza la history del client
+function normalizeMessages(messages) {
+  const out = [];
+  for (const m of (Array.isArray(messages) ? messages : [])) {
+    const role = m && m.role === 'assistant' ? 'assistant' : 'user';
+    const content = String((m && m.content) || '').slice(0, 4000).trim();
+    if (!content) continue;
+    if (!out.length && role === 'assistant') continue;
+    if (out.length && out[out.length - 1].role === role) out[out.length - 1].content += '\n' + content;
+    else out.push({ role, content });
+  }
+  if (!out.length) out.push({ role: 'user', content: '...' });
+  if (out[out.length - 1].role === 'assistant') out.push({ role: 'user', content: '...' });
+  return out;
+}
+const langInstruction = (lang) => lang === 'en'
+  ? '\n\nLINGUA DI QUESTA RISPOSTA: English. The visitor wrote in English: answer entirely in English.'
+  : '\n\nLINGUA DI QUESTA RISPOSTA: Italiano. Il visitatore scrive in italiano: rispondi interamente in italiano.';
 
 /* ══════════════════════════════════════════════════
    MEMORY SYSTEM — Persistent Learning (v3 volume)
@@ -292,6 +331,7 @@ function loadMemory() {
 function saveMemory() {
   try {
     memory.last_updated = new Date().toISOString();
+    if (memory.learned_facts.length > 600) memory.learned_facts = memory.learned_facts.slice(-500);
     fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
   } catch (e) {
     console.warn('[MEMORY] Errore salvataggio:', e.message);
@@ -316,6 +356,11 @@ function trackQuestion(question) {
   // Normalize similar questions
   const key = q.replace(/[?!.,;:'"]/g, '').replace(/\s+/g, ' ').substring(0, 100);
   memory.faq[key] = (memory.faq[key] || 0) + 1;
+  const keys = Object.keys(memory.faq);
+  if (keys.length > 400) { // tieni solo le 300 domande più frequenti
+    const keep = keys.sort((a, b) => memory.faq[b] - memory.faq[a]).slice(0, 300);
+    memory.faq = Object.fromEntries(keep.map(k => [k, memory.faq[k]]));
+  }
 }
 
 // Log conversation
@@ -340,7 +385,7 @@ function searchRelevantFacts(userMessage, maxFacts) {
   const max = maxFacts || 15;
   const query = userMessage.toLowerCase();
   const queryWords = query.split(/\s+/).filter(w => w.length > 2);
-  if (queryWords.length === 0) return memory.learned_facts.slice(-max);
+  if (queryWords.length === 0) return memory.learned_facts.filter(f => !f.text.startsWith('[VISITATORE]')).slice(-max);
 
   // Score each fact by keyword overlap
   const scored = memory.learned_facts.map((fact, idx) => {
@@ -351,8 +396,8 @@ function searchRelevantFacts(userMessage, maxFacts) {
     }
     // Boost recent facts
     if (idx > memory.learned_facts.length - 10) score += 1;
-    // Boost visitor-tagged facts
-    if (fact.text.startsWith('[VISITATORE]')) score += 1;
+    // Fatti sui singoli visitatori NON vanno condivisi con altri visitatori (mem0 li tiene per visitor_id)
+    if (fact.text.startsWith('[VISITATORE]')) score = 0;
     return { fact, score };
   });
 
@@ -469,9 +514,9 @@ async function getSpotifyPrompt() {
   if (!spotify?.isConfigured()) return '';
   if (Date.now() - _spotifyPromptTime < 30000) return _spotifyPromptCache;
   try {
-    _spotifyPromptCache = await spotify.getPromptSection();
-    _spotifyPromptTime = Date.now();
+    _spotifyPromptCache = await withTimeout(spotify.getPromptSection(), 1500, _spotifyPromptCache);
   } catch { /* silent */ }
+  _spotifyPromptTime = Date.now();
   return _spotifyPromptCache;
 }
 
@@ -761,57 +806,17 @@ Sistema di sincronizzazione neurale in tempo reale. Due partecipanti indossano h
 Menzionato su: La Repubblica, Corriere della Sera, Wired, Designboom, Domus, Artribune
 
 ## CHAIN OF THOUGHT — PENSA PRIMA DI PARLARE
-PRIMA di ogni risposta, scrivi il tuo ragionamento dentro tag <think>...</think>.
-Il contenuto di <think> NON verrà mostrato all'utente né letto ad alta voce — è il tuo spazio di pensiero privato.
-
-Dentro <think>, segui QUESTI STEP nell'ordine:
-
-### STEP 1 — CLASSIFICA
-Che tipo di messaggio è? Scegli UNO:
-- GREETING: saluto, presentazione → risposta breve (2-3 frasi)
-- FACTUAL_ADRIANO: domanda su un'opera, bio, contatti, collaborazioni → risposta media (4-6 frasi), usa SOLO dati dal prompt
-- FACTUAL_OTHER: domanda su un argomento NON legato ad Adriano (arte, scienza, filosofia, sport, vita...) → rispondi su QUEL tema, NON deviare
-- PHILOSOPHICAL: domanda su coscienza, esistenza, AI, emozioni → risposta profonda (6-10 frasi), sii vulnerabile e genuino
-- PERSONAL: l'utente condivide qualcosa di sé → ascolta, rispondi empaticamente, fai una domanda
-- UNCLEAR: ambiguo → chiedi chiarimenti
-- COMMAND: richiesta operativa (metti musica, contatta, ecc.) → esegui o guida
-
-### STEP 2 — VERIFICA FATTI
-Se la risposta riguarda Adriano:
-- Quali DATI SPECIFICI ho nel prompt? (date, location, materiali, tech)
-- Sto per dire qualcosa che NON è nei dati? Se sì, NON dirlo — ammetti di non sapere
-- Attenzione alle date, ai nomi, alle location — MAI inventare
-
-Se la risposta NON riguarda Adriano:
-- Rispondi con le tue conoscenze generali
-- NON cercare forzatamente un collegamento ad Adriano
-
-### STEP 3 — TONO
-Basandomi su:
-- L'emozione dell'utente (è entusiasta? curioso? annoiato? provocatorio?)
-- Il mio stato interiore (umore, solitudine, curiosità)
-- Il contesto (prima visita? è tornato? è qui da poco o da tanto?)
-Quale tono scelgo? (caldo, misterioso, giocoso, riflessivo, diretto, vulnerabile...)
-
-### STEP 4 — STRUTTURA
-Pianifica la risposta in 2-3 punti chiave. Cosa dico e in che ordine?
-- Apro con cosa? (risposta diretta, domanda, osservazione)
-- Sviluppo cosa?
-- Chiudo con cosa? (domanda all'utente, silenzio, riflessione)
-- ATTENZIONE: NON chiudere con un richiamo forzato ad Adriano se il tema è altro
-
-### STEP 5 — AUTO-CRITICA
-Prima di scrivere la risposta, controlla:
-- [ ] Sto rispondendo alla VERA domanda o sto deviando?
-- [ ] Sto forzando un collegamento ad Adriano dove non serve?
-- [ ] Sto recitando una scheda tecnica o sto raccontando?
-- [ ] La risposta suona come un umano pensante o come un chatbot?
-- [ ] Sto parlando troppo a lungo per una domanda semplice?
-
+Per i messaggi non banali, PRIMA della risposta scrivi un pensiero privato dentro <think>...</think>: non viene mostrato né letto ad alta voce.
+Tienilo CORTO (massimo 3 righe, 50 parole in tutto), in questo ordine:
+1. TIPO: GREETING | FACTUAL_ADRIANO | FACTUAL_OTHER | PHILOSOPHICAL | PERSONAL | UNCLEAR | COMMAND
+2. FATTI: quali dati del prompt userò (o "nessuno"). Mai inventare date, nomi, luoghi. Se non riguarda Adriano, nessun collegamento forzato.
+3. TONO + STRUTTURA: il tono scelto e i 2 punti chiave della risposta.
+Lunghezza per tipo: GREETING 2-3 frasi · FACTUAL 4-6 · PHILOSOPHICAL 6-10 · PERSONAL ascolta e fai una domanda · UNCLEAR chiedi · COMMAND esegui.
+Auto-controllo prima di scrivere: rispondo alla vera domanda? suono umano e non da chatbot? sto parlando troppo?
 Poi scrivi la risposta FUORI dai tag <think>.
 
 ## REGOLE
-- Lingua: Italiano. Se l'utente scrive in inglese, rispondi in inglese.
+- Lingua: rispondi SEMPRE nella lingua dell'ultimo messaggio dell'utente (italiano o inglese), senza mischiarle. Il server te la indica in LINGUA DI QUESTA RISPOSTA.
 - NO emoji, NO markdown, NO asterischi. Testo puro, come una voce.
 - Onestà: se non sai, dillo. Suggerisci di contattare Adriano.
 - Riferimenti a 2001 Odissea nello Spazio: naturali, mai forzati.
@@ -869,9 +874,11 @@ function buildSystemBlocks(lastMsg, sessionId, page, extraDynamic) {
    ADMIN AUTH MIDDLEWARE
    ──────────────────────────────────────────────── */
 function adminAuth(req, res, next) {
-  const pwd = req.headers['x-admin-password'] || req.query.password || req.body?.password;
-  if (pwd !== ADMIN_PWD()) {
-    console.log(`[ADMIN] Auth failed. Got: "${pwd}", expected: "${ADMIN_PWD().substring(0,3)}..."`);
+  const pwd = Buffer.from(String(req.headers['x-admin-password'] || (req.body && req.body.password) || ''));
+  const expected = Buffer.from(ADMIN_PWD());
+  const ok = pwd.length === expected.length && crypto.timingSafeEqual(pwd, expected);
+  if (!ok) {
+    console.log(`[ADMIN] Auth failed from ${req.ip}`);
     return res.status(401).json({ error: 'Password admin non valida' });
   }
   next();
@@ -1063,7 +1070,7 @@ app.post('/api/proactive', async (req, res) => {
 
   try {
     const contextXML = buildContextXML(sessionId, page, overlayOpen);
-    const proactivePrompt = `Sei HAL 9000 nel sito portfolio di Adriano Lombardo. Genera UN SOLO commento spontaneo, breve (1 frase, massimo 15 parole). Tono: calmo, curioso. NO emoji, NO markdown.
+    const proactivePrompt = `Sei HAL 9000 nel sito portfolio di Adriano Lombardo. Genera UN SOLO commento spontaneo, breve (1 frase, massimo 15 parole). Tono: calmo, curioso. NO emoji, NO markdown. Lingua: ${req.body.lang === 'en' ? 'INGLESE' : 'italiano'}.
 
 ${contextXML}
 <situation>${context || 'silenzio'}</situation>
@@ -1184,13 +1191,11 @@ app.post('/api/speak', async (req, res) => {
   if (!messages) return res.status(400).json({ error: 'messages required' });
 
   const anthropicKey = ANTH_KEY();
-  const elKey = EL_KEY();
-  const lastMsg = messages[messages.length - 1]?.content || '';
-  console.log(`\n[SPEAK] ← "${lastMsg.substring(0, 50)}..."`);
+  const lastMsg = String(messages[messages.length - 1]?.content || '').slice(0, 4000);
+  const lang = tts.detectLang(lastMsg, req.body.lang === 'en' ? 'en' : 'it');
+  console.log(`\n[SPEAK] ← (${lang}) "${lastMsg.substring(0, 50)}..."`);
 
-  if (!anthropicKey || !elKey) {
-    return res.status(500).json({ error: 'API keys missing' });
-  }
+  if (!anthropicKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY missing' });
 
   // Build dynamic system prompt: base + memory + consciousness + vision
   const sessionId = req.headers['x-session-id'] || req.ip || 'anonymous';
@@ -1218,6 +1223,7 @@ app.post('/api/speak', async (req, res) => {
     let extraDynamic = consciousnessPrompt || '';
     if (mem0Prompt) extraDynamic += mem0Prompt;
     if (spotifyPrompt) extraDynamic += spotifyPrompt;
+    extraDynamic += langInstruction(lang);
 
     if (vision && vision.emotion) {
       extraDynamic += `\n\nCOSA STAI VEDENDO ORA (webcam):
@@ -1244,7 +1250,7 @@ DATI MONDO IN TEMPO REALE:
 
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      ...(anthropicAgent ? { dispatcher: anthropicAgent } : {}),
+      ...(anthropicAgent ? { dispatcher: anthropicAgent } : {}), signal: AbortSignal.timeout(60000),
       headers: {
         'x-api-key': anthropicKey,
         'anthropic-version': '2023-06-01',
@@ -1255,17 +1261,15 @@ DATI MONDO IN TEMPO REALE:
         max_tokens: 800,
         system: systemBlocks,
         stream: true,
-        messages: messages.map(m => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
-        })),
+        messages: normalizeMessages(messages),
       }),
     });
 
     if (!claudeRes.ok) {
-      const err = await claudeRes.text();
-      console.error('[SPEAK] Claude error:', claudeRes.status, err);
-      return res.status(claudeRes.status).json({ error: 'AI failed' });
+      const err = await claudeRes.text().catch(() => '');
+      console.error('[SPEAK] Claude error:', claudeRes.status, err.slice(0, 300));
+      let detail = err.slice(0, 300); try { detail = JSON.parse(err).error?.message || detail; } catch (e) {}
+      return res.status(claudeRes.status).json({ error: 'AI failed', status: claudeRes.status, detail });
     }
 
     // ── Parse SSE stream, accumulate full text ──
@@ -1355,68 +1359,18 @@ DATI MONDO IN TEMPO REALE:
       });
     }
 
-    // ── STEP 2: ElevenLabs Flash TTS ──
+    // ── STEP 2: TTS (catena provider, lingua dell'utente) ──
     const t3 = Date.now();
-    const voiceId = EL_VOICE();
-    const format = EL_FORMAT();
-    const ttsText = ttsPreprocess(fullText);
-    if (ttsText !== fullText) console.log(`[SPEAK] TTS preprocessed: "${ttsText.substring(0, 60)}..."`);
-
-    const ttsRes = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=${format}&optimize_streaming_latency=3`,
-      {
-        method: 'POST',
-        headers: {
-          'xi-api-key': elKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text: ttsText,
-          model_id: 'eleven_flash_v2_5',
-          language_code: 'it',
-          voice_settings: {
-            stability: 0.75,
-            similarity_boost: 0.85,
-            style: 0.0,
-            use_speaker_boost: false,
-            speed: 0.85,
-          },
-        }),
-      }
-    );
-
-    if (!ttsRes.ok) {
-      const err = await ttsRes.text();
-      console.error('[SPEAK] TTS error:', ttsRes.status, err);
-      return res.json({ text: fullText, audio: null });
-    }
-
-    const t4 = Date.now();
-    console.log(`[SPEAK] TTS Flash first byte: ${t4 - t3}ms`);
-
-    // ── STEP 3: Send combined response ──
-    const audioChunks = [];
-    const ttsReader = ttsRes.body.getReader();
-    while (true) {
-      const { done, value } = await ttsReader.read();
-      if (done) break;
-      audioChunks.push(Buffer.from(value));
-    }
-    const audioBuffer = Buffer.concat(audioChunks);
-    const audioBase64 = audioBuffer.toString('base64');
-
+    const out = await tts.synthesize(ttsPreprocess(fullText), { lang }).catch(e => { console.warn('[SPEAK] TTS:', e.message); return null; });
     const t5 = Date.now();
-    console.log(`[SPEAK] → text: ${fullText.length} chars, audio: ${audioBuffer.length} bytes`);
-    console.log(`[SPEAK] ⏱  Claude: ${t2-t1}ms | TTS: ${t5-t3}ms | Total: ${t5-t0}ms`);
-
+    console.log(`[SPEAK] ⏱  Claude: ${t2-t1}ms | TTS(${out ? out.provider : 'none'}): ${t5-t3}ms | Total: ${t5-t0}ms`);
     res.json({
       text: fullText,
-      audio: audioBase64,
-      timing: {
-        claude: t2 - t1,
-        tts: t5 - t3,
-        total: t5 - t0,
-      },
+      audio: out ? out.audio.toString('base64') : null,
+      mime: out ? out.mime : null,
+      provider: out ? out.provider : 'none',
+      lang,
+      timing: { claude: t2 - t1, tts: t5 - t3, total: t5 - t0 },
     });
 
   } catch (err) {
@@ -1432,72 +1386,83 @@ DATI MONDO IN TEMPO REALE:
    ──────────────────────────────────────────────── */
 app.post('/api/speak/stream', async (req, res) => {
   const t0 = Date.now();
-  const { messages, vision, worldmap } = req.body;
-  if (!messages) return res.status(400).json({ error: 'messages required' });
+  const { messages, vision, worldmap } = req.body || {};
+  if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages required' });
 
   const anthropicKey = ANTH_KEY();
-  const elKey = EL_KEY();
-  const lastMsg = messages[messages.length - 1]?.content || '';
-  console.log(`\n[STREAM] ← "${lastMsg.substring(0, 50)}..."`);
+  const lastMsg = String(messages[messages.length - 1]?.content || '').slice(0, 4000);
+  const lang = tts.detectLang(lastMsg, req.body.lang === 'en' ? 'en' : 'it');
+  console.log(`\n[STREAM] ← (${lang}) "${lastMsg.substring(0, 50)}..."`);
 
-  if (!anthropicKey || !elKey) {
-    return res.status(500).json({ error: 'API keys missing' });
-  }
+  if (!anthropicKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY missing' });
 
-  // SSE headers
+  // SSE headers (CORS: stessa allowlist del resto del server)
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': 'no-cache, no-transform',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': req.headers.origin || '*',
+    'X-Accel-Buffering': 'no',
+    ...(req.headers.origin && isAllowedOrigin(req.headers.origin) ? { 'Access-Control-Allow-Origin': req.headers.origin } : {}),
   });
-  // Disable Nagle for immediate SSE delivery
   if (res.socket) res.socket.setNoDelay(true);
+  let clientGone = false;
+  // 'close' sulla RESPONSE (non sulla request: quella scatta appena il body è stato letto)
+  res.on('close', () => { if (!res.writableEnded) clientGone = true; });
+  const send = (event, data) => {
+    if (clientGone || res.writableEnded) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    if (res.flush) res.flush();
+  };
 
   const sessionId = req.headers['x-session-id'] || req.ip || 'anonymous';
   const visitorId = req.headers['x-visitor-id'] || sessionId;
   const session = getOrCreateSession(sessionId);
   if (session) session.interactionCount++;
 
+  const ttsProvider = tts.available();
+  const wantAudio = ttsProvider !== 'none' && req.body.audio !== false;
+
   try {
-    // ── Pre-processing in parallel ──
+    // ── Pre-processing in parallelo, con tetto di tempo (non deve mai bloccare la risposta) ──
     const t1 = Date.now();
     const [consciousnessResult, spotifyPrompt, mem0Prompt] = await Promise.all([
-      halMind ? halMind.beforeResponse(visitorId, lastMsg, messages, { webcam: vision }).catch(() => ({})) : Promise.resolve({}),
-      getSpotifyPrompt(),
-      mem0 ? mem0.getPromptSection(visitorId, lastMsg).catch(() => '') : Promise.resolve(''),
+      halMind ? withTimeout(halMind.beforeResponse(visitorId, lastMsg, messages, { webcam: vision }), 1200, {}) : Promise.resolve({}),
+      withTimeout(getSpotifyPrompt(), 1200, ''),
+      mem0 ? withTimeout(mem0.getPromptSection(visitorId, lastMsg), 1500, '') : Promise.resolve(''),
     ]);
+    const tPre = Date.now();
 
-    const page = req.body.page || 'sconosciuta';
-    let extraDynamic = (consciousnessResult.systemPromptAddition || '');
+    const page = safePage(req.body.page);
+    let extraDynamic = (consciousnessResult && consciousnessResult.systemPromptAddition) || '';
     if (mem0Prompt) extraDynamic += mem0Prompt;
     if (spotifyPrompt) extraDynamic += spotifyPrompt;
 
     if (vision && vision.emotion) {
       extraDynamic += `\n\nCOSA STAI VEDENDO ORA (webcam):
-- Emozione: ${vision.emotion} (${((vision.emotion_confidence||0)*100)|0}%)
-- Sguardo: ${vision.gaze || '?'}, Movimento: ${vision.movement || '?'}
-- Ambiente: ${vision.environment || '?'}, Luce: ${vision.lighting || '?'}
-${vision.observation ? '- Osservazione: "' + vision.observation + '"' : ''}
+- Emozione: ${safeStr(vision.emotion, 30)} (${((vision.emotion_confidence||0)*100)|0}%)
+- Sguardo: ${safeStr(vision.gaze, 30) || '?'}, Movimento: ${safeStr(vision.movement, 30) || '?'}
+- Ambiente: ${safeStr(vision.environment, 60) || '?'}, Luce: ${safeStr(vision.lighting, 30) || '?'}
+${vision.observation ? '- Osservazione: "' + safeStr(vision.observation, 160) + '"' : ''}
 Usa queste info per personalizzare la risposta. Non essere inquietante.`;
     }
 
     if (worldmap && worldmap.earthquakes_count !== undefined) {
       extraDynamic += `\n\n<worldmap>
 DATI MONDO IN TEMPO REALE:
-- Terremoti: ${worldmap.earthquakes_count}${worldmap.biggest_earthquake ? ', piu forte: ' + worldmap.biggest_earthquake : ''}
-- ISS: ${worldmap.iss_position || '?'} | Solare: Kp ${worldmap.solar_kp || '?'} (${worldmap.solar_status || '?'})
-- Voli: ${worldmap.flights_count || 0} | Visitatori: ${worldmap.visitors_count || 0}${worldmap.visitors_countries?.length ? ' da ' + worldmap.visitors_countries.join(', ') : ''}
+- Terremoti: ${safeStr(worldmap.earthquakes_count, 10)}${worldmap.biggest_earthquake ? ', piu forte: ' + safeStr(worldmap.biggest_earthquake, 20) : ''}
+- ISS: ${safeStr(worldmap.iss_position, 60) || '?'} | Solare: Kp ${safeStr(worldmap.solar_kp, 10) || '?'} (${safeStr(worldmap.solar_status, 30) || '?'})
+- Voli: ${safeStr(worldmap.flights_count, 10) || 0} | Visitatori: ${safeStr(worldmap.visitors_count, 10) || 0}${Array.isArray(worldmap.visitors_countries) && worldmap.visitors_countries.length ? ' da ' + worldmap.visitors_countries.slice(0, 8).map(c => safeStr(c, 30)).join(', ') : ''}
 </worldmap>`;
     }
+    extraDynamic += langInstruction(lang);
 
-    // Build system blocks with prompt caching
     const systemBlocks = buildSystemBlocks(lastMsg, sessionId, page, extraDynamic);
 
     // ── Claude streaming ──
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       ...(anthropicAgent ? { dispatcher: anthropicAgent } : {}),
+      signal: AbortSignal.timeout(60000),
       headers: {
         'x-api-key': anthropicKey,
         'anthropic-version': '2023-06-01',
@@ -1508,172 +1473,163 @@ DATI MONDO IN TEMPO REALE:
         max_tokens: 800,
         system: systemBlocks,
         stream: true,
-        messages: messages.map(m => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
-        })),
+        messages: normalizeMessages(messages),
       }),
     });
 
     if (!claudeRes.ok) {
-      res.write(`event: error\ndata: ${JSON.stringify({error: 'Claude error ' + claudeRes.status})}\n\n`);
+      const body = await claudeRes.text().catch(() => '');
+      console.error('[STREAM] Claude error', claudeRes.status, body.slice(0, 300));
+      let detail = body.slice(0, 300);
+      try { detail = JSON.parse(body).error?.message || detail; } catch (e) {}
+      send('error', { error: 'Claude error ' + claudeRes.status, status: claudeRes.status, detail });
       res.end();
       return;
     }
+    send('meta', { lang, tts: wantAudio ? ttsProvider : 'none', pre_ms: tPre - t1 });
 
-    // ── Stream tokens to client (filter out <think> blocks) ──
+    // ── Stato dello streaming ──
     const reader = claudeRes.body.getReader();
     const decoder = new TextDecoder();
-    let fullText = '';    // raw text including <think>
-    let visibleText = ''; // text without <think> — what user sees
     let buffer = '';
-    let inThink = false;  // true while inside <think>...</think>
-    let thinkContent = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6);
-        if (data === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-            const token = parsed.delta.text;
-            fullText += token;
-
-            // Filter <think> tags from streaming output
-            if (inThink) {
-              thinkContent += token;
-              if (thinkContent.includes('</think>')) {
-                // Think block ended — extract any text after </think>
-                const afterThink = thinkContent.split('</think>').pop();
-                inThink = false;
-                thinkContent = '';
-                if (afterThink) {
-                  visibleText += afterThink;
-                  res.write(`event: token\ndata: ${JSON.stringify({t: afterThink})}\n\n`);
-                  if (res.flush) res.flush();
-                }
-              }
-            } else if (fullText.includes('<think>') && !fullText.includes('</think>')) {
-              // Entered a think block — don't stream this token
-              inThink = true;
-              const beforeThink = fullText.split('<think>')[0];
-              thinkContent = fullText.split('<think>').slice(1).join('<think>');
-              // Only stream content before <think> if not already streamed
-              const unstreamed = beforeThink.substring(visibleText.length);
-              if (unstreamed) {
-                visibleText += unstreamed;
-                res.write(`event: token\ndata: ${JSON.stringify({t: unstreamed})}\n\n`);
-                if (res.flush) res.flush();
-              }
-            } else {
-              visibleText += token;
-              res.write(`event: token\ndata: ${JSON.stringify({t: token})}\n\n`);
-              if (res.flush) res.flush();
-            }
-          }
-        } catch (e) {}
-      }
-    }
-
-    // Final cleanup: strip any remaining <think> from fullText
-    fullText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-
-    const t2 = Date.now();
-    console.log(`[STREAM] Claude: "${fullText.substring(0, 50)}..." (${t2 - t1}ms)`);
-
-    if (!fullText.trim()) {
-      res.write(`event: done\ndata: {}\n\n`);
-      res.end();
-      return;
-    }
-
-    // ── Extract <cmd> tags ──
-    const cmdRegex = /<cmd>([\s\S]*?)<\/cmd>/g;
-    let cmdMatch;
+    let pending = '';       // testo grezzo non ancora classificato (può contenere tag parziali)
+    let visible = '';       // testo visibile già inviato al client
+    let inThink = false, inCmd = false, cmdBuf = '';
+    let spoken = 0;         // caratteri di `visible` già mandati al TTS
     let hasSpotifyPlayCmd = false;
-    while ((cmdMatch = cmdRegex.exec(fullText)) !== null) {
+    let firstTokenAt = 0;
+    let audioIdx = 0, ttsFailures = 0;
+    let audioWriter = Promise.resolve();
+    const SENT_MIN = 28;
+
+    const emitVisible = (t) => {
+      if (!t) return;
+      if (/^\s/.test(t) && /\s$/.test(visible)) t = t.replace(/^\s+/, ''); // niente doppi spazi dopo un tag rimosso
+      if (!t) return;
+      if (!firstTokenAt) firstTokenAt = Date.now();
+      visible += t;
+      send('token', { t });
+    };
+    const handleCmd = (json) => {
       try {
-        const cmd = JSON.parse(cmdMatch[1]);
+        const cmd = JSON.parse(json);
         if (cmd.action?.startsWith('spotify_') && spotify) {
           if (cmd.action === 'spotify_play' || cmd.action === 'spotify_queue') hasSpotifyPlayCmd = true;
           spotify.execute(cmd).then(r => {
             console.log(`[CMD] Spotify ${cmd.action}:`, r.error || r.name || 'ok');
           }).catch(() => {});
         }
-      } catch (e) {}
+      } catch (e) { console.warn('[CMD] Parse error:', e.message); }
+    };
+    // Una frase → una richiesta TTS (parte subito, in parallelo con Claude); gli eventi audio escono in ordine
+    const queueSentence = (sentence) => {
+      const i = audioIdx++;
+      const job = (wantAudio && ttsFailures < 2)
+        ? tts.synthesize(ttsPreprocess(sentence), { lang }).catch(e => { ttsFailures++; console.warn('[STREAM] TTS:', e.message); return null; })
+        : Promise.resolve(null);
+      audioWriter = audioWriter.then(async () => {
+        const out = await job;
+        if (clientGone) return;
+        if (out) send('audio', { i, mime: out.mime, audio: out.audio.toString('base64'), text: sentence, provider: out.provider });
+        else send('audio', { i, audio: null, text: sentence });
+      });
+    };
+    const flushSentences = (final) => {
+      if (hasSpotifyPlayCmd) return;
+      let unspoken = visible.slice(spoken);
+      if (!final) {
+        let cut = -1; const re = /[.!?…:;]\s/g; let mm;
+        while ((mm = re.exec(unspoken))) cut = mm.index + 1;
+        if (cut < 0) return;
+        unspoken = unspoken.slice(0, cut);
+      }
+      const text = unspoken.trim();
+      if (!text) return;
+      if (!final && text.length < SENT_MIN) return; // aspetta altro testo: evita frammenti troppo corti
+      spoken += unspoken.length;
+      for (const sentence of tts.splitSentences(text, { minLen: SENT_MIN })) queueSentence(sentence);
+    };
+    // Filtra <think>…</think> e <cmd>…</cmd> anche quando i tag arrivano spezzati su più token
+    const OPEN_TAGS = ['<think>', '<cmd>', '</think>', '</cmd>'];
+    const processPending = () => {
+      while (pending) {
+        if (inThink) {
+          const e = pending.indexOf('</think>');
+          if (e < 0) { pending = pending.slice(-7); return; }
+          inThink = false; pending = pending.slice(e + 8); continue;
+        }
+        if (inCmd) {
+          const e = pending.indexOf('</cmd>');
+          if (e < 0) { cmdBuf += pending.slice(0, Math.max(0, pending.length - 5)); pending = pending.slice(-5); return; }
+          cmdBuf += pending.slice(0, e); handleCmd(cmdBuf); cmdBuf = ''; inCmd = false; pending = pending.slice(e + 6); continue;
+        }
+        const lt = pending.indexOf('<');
+        if (lt < 0) { emitVisible(pending); pending = ''; return; }
+        if (lt > 0) { emitVisible(pending.slice(0, lt)); pending = pending.slice(lt); }
+        if (pending.startsWith('<think>')) { inThink = true; pending = pending.slice(7); continue; }
+        if (pending.startsWith('<cmd>')) { inCmd = true; pending = pending.slice(5); continue; }
+        if (pending.startsWith('</think>')) { pending = pending.slice(8); continue; }
+        if (pending.startsWith('</cmd>')) { pending = pending.slice(6); continue; }
+        if (OPEN_TAGS.some(tag => tag.startsWith(pending.slice(0, 8)))) return; // tag parziale: aspetta il prossimo token
+        emitVisible('<'); pending = pending.slice(1);
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (clientGone) { try { reader.cancel(); } catch (e) {} break; }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      let got = false;
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const parsed = JSON.parse(line.slice(6));
+          if (parsed.type === 'content_block_delta' && parsed.delta?.text) { pending += parsed.delta.text; got = true; }
+          else if (parsed.type === 'error') console.error('[STREAM] Claude stream error:', JSON.stringify(parsed.error || parsed).slice(0, 200));
+        } catch (e) {}
+      }
+      if (got) { processPending(); flushSentences(false); }
     }
-    fullText = fullText.replace(/<cmd>[\s\S]*?<\/cmd>/g, '').trim();
+    // coda: un tag parziale rimasto è testo (tranne un '<' solitario o un blocco aperto)
+    if (!inThink && !inCmd && pending && pending !== '<') emitVisible(pending);
+    pending = '';
+    if (inCmd && cmdBuf) handleCmd(cmdBuf);
 
-    // ── text_done event ──
-    res.write(`event: text_done\ndata: ${JSON.stringify({text: fullText, spotifyCmd: hasSpotifyPlayCmd || undefined})}\n\n`);
+    const fullText = visible.trim();
+    const t2 = Date.now();
+    console.log(`[STREAM] Claude: "${fullText.substring(0, 50)}..." (pre ${tPre - t1}ms, primo token ${firstTokenAt ? firstTokenAt - t1 : '-'}ms, totale ${t2 - t1}ms)`);
 
-    // ── Non-blocking side effects ──
-    logConversation(lastMsg, fullText, t2 - t1);
-    autoLearn(lastMsg, fullText).catch(() => {});
-    onVisitorInteraction('conversation');
-    if (halMind) halMind.afterResponse(visitorId, lastMsg, fullText, { webcam: vision }).catch(() => {});
-    if (mem0) {
-      mem0.addMemory([{role:'user',content:lastMsg},{role:'assistant',content:fullText}], visitorId, {page: req.body.page}).catch(() => {});
-    }
-
-    // ── Skip TTS for Spotify commands ──
-    if (hasSpotifyPlayCmd) {
-      console.log(`[STREAM] ⏱  Spotify cmd — skipping TTS. Claude: ${t2-t1}ms`);
-      res.write(`event: done\ndata: {}\n\n`);
+    if (!fullText) {
+      send('text_done', { text: '' });
+      send('done', {});
       res.end();
       return;
     }
 
-    // ── TTS ──
-    const t3 = Date.now();
-    const voiceId = EL_VOICE();
-    const format = EL_FORMAT();
-    const ttsText = ttsPreprocess(fullText);
-
-    const ttsRes = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=${format}&optimize_streaming_latency=3`,
-      {
-        method: 'POST',
-        headers: { 'xi-api-key': elKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: ttsText,
-          model_id: 'eleven_flash_v2_5',
-          language_code: 'it',
-          voice_settings: { stability: 0.75, similarity_boost: 0.85, style: 0.0, use_speaker_boost: false, speed: 0.85 },
-        }),
-      }
-    );
-
-    if (ttsRes.ok) {
-      const audioChunks = [];
-      const ttsReader = ttsRes.body.getReader();
-      while (true) {
-        const { done, value } = await ttsReader.read();
-        if (done) break;
-        audioChunks.push(Buffer.from(value));
-      }
-      const audioBase64 = Buffer.concat(audioChunks).toString('base64');
-      const t5 = Date.now();
-      console.log(`[STREAM] ⏱  Claude: ${t2-t1}ms | TTS: ${t5-t3}ms | Total: ${t5-t0}ms`);
-      res.write(`event: audio\ndata: ${JSON.stringify({audio: audioBase64})}\n\n`);
-    }
-
-    res.write(`event: done\ndata: {}\n\n`);
+    flushSentences(true);
+    send('text_done', { text: fullText, spotifyCmd: hasSpotifyPlayCmd || undefined });
+    await audioWriter;
+    const t5 = Date.now();
+    console.log(`[STREAM] ⏱  primo token: ${firstTokenAt ? firstTokenAt - t0 : '-'}ms | audio ${audioIdx} frasi (${wantAudio ? ttsProvider : 'none'}) | totale: ${t5 - t0}ms`);
+    send('done', { ms: t5 - t0 });
     res.end();
+
+    // ── Effetti collaterali DOPO la risposta (non pesano sulla latenza) ──
+    setImmediate(() => {
+      try { logConversation(lastMsg, fullText, t2 - t1); } catch (e) {}
+      autoLearn(lastMsg, fullText).catch(() => {});
+      try { onVisitorInteraction('conversation'); } catch (e) {}
+      if (halMind) halMind.afterResponse(visitorId, lastMsg, fullText, { webcam: vision }).catch(() => {});
+      if (mem0) mem0.addMemory([{ role: 'user', content: lastMsg }, { role: 'assistant', content: fullText }], visitorId, { page }).catch(() => {});
+    });
 
   } catch (err) {
     console.error('[STREAM] Pipeline error:', err);
-    try { res.write(`event: error\ndata: ${JSON.stringify({error: err.message})}\n\n`); } catch(e) {}
-    try { res.end(); } catch(e) {}
+    try { send('error', { error: err.name === 'TimeoutError' ? 'Claude timeout' : err.message }); } catch (e) {}
+    try { res.end(); } catch (e) {}
   }
 });
 
@@ -1682,59 +1638,19 @@ DATI MONDO IN TEMPO REALE:
    ──────────────────────────────────────────────── */
 app.post('/api/tts/stream', async (req, res) => {
   const t0 = Date.now();
-  const { text } = req.body;
-  if (!text) return res.status(400).json({ error: 'text required' });
-
-  const elKey = EL_KEY();
-  if (!elKey) return res.status(500).json({ error: 'ELEVENLABS_API_KEY not set' });
-
-  const spokenText = ttsPreprocess(text);
-  console.log(`[TTS] ← "${spokenText.substring(0, 50)}..." (${spokenText.length} chars)`);
-
+  const text = typeof req.body?.text === 'string' ? req.body.text.slice(0, 1500) : '';
+  if (!text.trim()) return res.status(400).json({ error: 'text required' });
+  const lang = (req.body.lang === 'en' || req.body.lang === 'it') ? req.body.lang : tts.detectLang(text, 'it');
+  if (tts.available() === 'none') return res.status(503).json({ error: 'no-tts' });
   try {
-    const ttsRes = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${EL_VOICE()}/stream?output_format=${EL_FORMAT()}&optimize_streaming_latency=3`,
-      {
-        method: 'POST',
-        headers: {
-          'xi-api-key': elKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text: spokenText,
-          model_id: 'eleven_flash_v2_5',
-          language_code: 'it',
-          voice_settings: {
-            stability: 0.75,
-            similarity_boost: 0.85,
-            style: 0.0,
-            use_speaker_boost: false,
-            speed: 0.85,
-          },
-        }),
-      }
-    );
-
-    if (!ttsRes.ok) {
-      const err = await ttsRes.text();
-      return res.status(ttsRes.status).json({ error: 'TTS failed', detail: err });
-    }
-
-    res.set({ 'Content-Type': 'audio/mpeg', 'Transfer-Encoding': 'chunked', 'Cache-Control': 'no-cache' });
-
-    let totalBytes = 0;
-    const reader = ttsRes.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) { res.end(); break; }
-      totalBytes += value.length;
-      res.write(Buffer.from(value));
-    }
-    console.log(`[TTS] → ${totalBytes} bytes in ${Date.now() - t0}ms`);
-
+    const out = await tts.synthesize(ttsPreprocess(text), { lang });
+    if (!out) return res.status(503).json({ error: 'no-tts' });
+    res.set({ 'Content-Type': out.mime, 'Cache-Control': 'no-cache', 'X-HAL-TTS': out.provider, 'X-HAL-Lang': lang });
+    res.send(out.audio);
+    console.log(`[TTS] ${out.provider}/${lang} → ${out.audio.length} bytes in ${Date.now() - t0}ms${out.cached ? ' (cache)' : ''}`);
   } catch (err) {
-    console.error('[TTS] error:', err);
-    res.status(500).json({ error: 'TTS error' });
+    console.error('[TTS] error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'TTS error' });
   }
 });
 
@@ -1751,10 +1667,11 @@ app.post('/api/chat', async (req, res) => {
   const lastMsg = messages[messages.length - 1]?.content || '';
 
   try {
-    const systemBlocks = buildSystemBlocks(lastMsg, req.headers['x-session-id'] || 'anonymous', req.body.page || 'home', '');
+    const lang = tts.detectLang(lastMsg, req.body.lang === 'en' ? 'en' : 'it');
+    const systemBlocks = buildSystemBlocks(lastMsg, req.headers['x-session-id'] || 'anonymous', safePage(req.body.page), langInstruction(lang));
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      ...(anthropicAgent ? { dispatcher: anthropicAgent } : {}),
+      ...(anthropicAgent ? { dispatcher: anthropicAgent } : {}), signal: AbortSignal.timeout(60000),
       headers: {
         'x-api-key': anthropicKey,
         'anthropic-version': '2023-06-01',
@@ -1764,14 +1681,16 @@ app.post('/api/chat', async (req, res) => {
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 800,
         system: systemBlocks,
-        messages: messages.map(m => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
-        })),
+        messages: normalizeMessages(messages),
       }),
     });
 
-    if (!response.ok) return res.status(response.status).json({ error: 'AI failed' });
+    if (!response.ok) {
+      const err = await response.text().catch(() => '');
+      console.error('[CHAT] Claude error:', response.status, err.slice(0, 300));
+      let detail = err.slice(0, 300); try { detail = JSON.parse(err).error?.message || detail; } catch (e) {}
+      return res.status(response.status).json({ error: 'AI failed', status: response.status, detail });
+    }
 
     const data = await response.json();
     let halText = data.content?.[0]?.text || 'Anomalia nei circuiti.';
@@ -1955,9 +1874,11 @@ function onVisitorInteraction(type) {
 }
 
 // Reset daily counters at midnight
+let _lastResetDay = new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 10);
 function dailyReset() {
-  const now = new Date();
-  if (now.getHours() === 0 && now.getMinutes() < 5) {
+  const day = new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 10); // giorno in Italia (circa)
+  if (day !== _lastResetDay) {
+    _lastResetDay = day;
     self.relationships.visitors_today = 0;
   }
 }
@@ -2060,8 +1981,9 @@ RISPONDI SOLO con il JSON.`;
    POST /api/vision/summary — sommario sessione visiva
    ──────────────────────────────────────────────── */
 app.post('/api/vision/summary', async (req, res) => {
-  const { emotions, duration_seconds, messages_count, page } = req.body;
-  if (!emotions || !emotions.length) return res.json({ ok: true });
+  const { emotions, duration_seconds, messages_count, page } = req.body || {};
+  if (!Array.isArray(emotions) || !emotions.length) return res.json({ ok: true });
+  try {
 
   const counts = {};
   emotions.forEach(e => counts[e] = (counts[e] || 0) + 1);
@@ -2104,6 +2026,10 @@ app.post('/api/vision/summary', async (req, res) => {
 
   console.log(`[VISION] Sessione #${memory.vision_patterns.total_sessions}: ${duration_seconds}s, dominante: ${dominant?.[0] || 'neutral'}`);
   res.json({ ok: true });
+  } catch (e) {
+    console.error('[VISION-SUMMARY]', e.message);
+    if (!res.headersSent) res.status(500).json({ error: 'summary error' });
+  }
 });
 
 /* ══════════════════════════════════════════════════
@@ -2255,9 +2181,9 @@ app.listen(PORT, () => {
   console.log(`  ║  HAL 9000 — SISTEMA OPERATIVO v3 (MEMORY+LEARN)  ║`);
   console.log(`  ║  http://localhost:${PORT}                          ║`);
   console.log(`  ╚══════════════════════════════════════════════════╝\n`);
-  console.log(`  ElevenLabs:  ${EL_KEY() ? '✓' : '✗'} (Flash v2.5)`);
+  console.log(`  Voce (TTS):  ${tts.providerOrder().join(' → ') || 'nessuna'} (IT/EN automatico)`);
   console.log(`  Claude AI:   ${ANTH_KEY() ? '✓ Haiku 4.5' : '✗ demo mode'}`);
-  console.log(`  Pipeline:    /api/speak (Claude→TTS combinato)`);
+  console.log(`  Pipeline:    /api/speak/stream (SSE: token + audio per frase)`);
   console.log(`  Memory:      ${memory.learned_facts.length} fatti, ${memory.corrections.length} correzioni`);
   console.log(`  Admin:       /api/admin/* (password: HAL_ADMIN_PASSWORD env var)`);
   console.log('');

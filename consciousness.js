@@ -108,10 +108,10 @@ class HALConsciousness {
 
     try {
       // 1. Retrieve relevant memories (sync, fast)
-      const memories = this.memory.retrieve(userMessage, sessionId);
+      const memories = this.memory.retrieve(userMessage, 5);
       if (memories && memories.length > 0) {
-        const memSection = prepareContext(memories);
-        if (memSection) parts.push(memSection);
+        const memSection = memories.map(m => '- ' + String(m.text || '').slice(0, 200)).join('\n');
+        if (memSection) parts.push('Memorie episodiche rilevanti:\n' + memSection);
       }
     } catch (e) {
       console.warn('[CONSCIOUSNESS] memory retrieve error:', e.message);
@@ -143,29 +143,16 @@ class HALConsciousness {
 
     try {
       // 5. Enriched context from curiosity-bonding (combines multiple signals)
-      const enriched = enrichContext({
-        sessionId,
-        userMessage,
-        conversationHistory,
-        sensorData,
-        emotion: this.emotion,
-        curiosity: this.curiosity,
-        relationships: this.relationships,
-      });
+      const enriched = enrichContext(sessionId, userMessage);
       if (enriched) parts.push(enriched);
     } catch (e) {
       console.warn('[CONSCIOUSNESS] enrichContext error:', e.message);
     }
 
     try {
-      // 6. Inner monologue — the ONLY awaited call (it shapes the response)
-      innerMonologue = await generateInnerMonologue({
-        userMessage,
-        conversationHistory,
-        emotionState: this.emotion.getEmotionLabel(),
-        memories: this.memory.retrieve(userMessage, sessionId),
-        sensorData,
-      });
+      // 6. Inner monologue — NON deve bloccare la risposta: parte in background,
+      //    viene usato subito se pronto entro 700 ms, altrimenti guida il turno successivo.
+      innerMonologue = await this._monologueFor(sessionId, userMessage);
     } catch (e) {
       console.warn('[CONSCIOUSNESS] inner monologue error:', e.message);
     }
@@ -197,6 +184,24 @@ class HALConsciousness {
       : '';
 
     return { systemPromptAddition, innerMonologue };
+  }
+
+  _monologueFor(sessionId, userMessage) {
+    this._monoCache = this._monoCache || new Map();
+    const prev = this._monoCache.get(sessionId);
+    if (!userMessage || userMessage.length < 20) return Promise.resolve(prev ? prev.value : null);
+    let memories = [], profile = {};
+    try { memories = this.memory.retrieve(userMessage, 5) || []; } catch (e) {}
+    try { profile = this.userModel.getOrCreate(sessionId) || {}; } catch (e) {}
+    const job = Promise.resolve()
+      .then(() => generateInnerMonologue(userMessage, memories, this.emotion.getEmotionLabel(), profile))
+      .then(v => {
+        this._monoCache.set(sessionId, { value: v, at: Date.now() });
+        if (this._monoCache.size > 200) this._monoCache.delete(this._monoCache.keys().next().value);
+        return v;
+      })
+      .catch(() => null);
+    return Promise.race([job, new Promise(r => setTimeout(() => r(prev ? prev.value : null), 700))]);
   }
 
   /* ── afterResponse ───────────────────────────────────────────

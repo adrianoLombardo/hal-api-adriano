@@ -493,6 +493,7 @@ Persona: ${this.coreMemory.agentPersona}`);
     }
 
     // Find tags with enough entries to extract a pattern
+    let promoted = 0;
     for (const [tag, mems] of Object.entries(tagGroups)) {
       if (mems.length < SEMANTIC_THRESHOLD) continue;
 
@@ -503,6 +504,7 @@ Persona: ${this.coreMemory.agentPersona}`);
       );
       if (existingSemantic) continue;
 
+      if (promoted++ >= 3) break; // massimo 3 chiamate Claude per ciclo
       // Ask Claude to distill a pattern
       const texts = mems.slice(-8).map(m => `- ${m.text}`).join('\n');
       const system = `Sei il sistema di memoria semantica di HAL 9000. Analizza queste memorie episodiche con tag "${tag}" e distilla UN pattern o conoscenza generale. Rispondi con UNA SOLA frase concisa (max 100 parole). No markdown, no backtick.`;
