@@ -28,7 +28,7 @@ let state = null;
 let busy = false;
 
 /* ── stato ── */
-function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {} }; }
+function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {}, igToken: null, igTokenAt: null }; }
 function loadState() {
   try { state = Object.assign(defaultState(), JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))); }
   catch (e) { state = defaultState(); }
@@ -148,6 +148,21 @@ async function sendPackage(it, chatId, { manual = false } = {}) {
   } finally { busy = false; }
 }
 
+/* ── token Instagram: dura 60 giorni, si rinnova quando ha almeno 24 h di vita ── */
+async function refreshIgToken({ force = false } = {}) {
+  if (!ig.configured()) return;
+  const age = state.igTokenAt ? Date.now() - state.igTokenAt : Infinity;
+  if (!force && age < 20 * 86400 * 1000) return;          // rinnovo ogni 20 giorni
+  try {
+    const r = await ig.refreshToken();
+    if (r && r.access_token) {
+      state.igToken = r.access_token; state.igTokenAt = Date.now(); saveState();
+      ig.setToken(r.access_token);
+      log(`token Instagram rinnovato, scade tra ${Math.round((r.expires_in || 0) / 86400)} giorni`);
+    }
+  } catch (e) { warn('rinnovo token Instagram:', (e.message || '').slice(0, 200)); }
+}
+
 /* ── scheduler ── */
 async function tick() {
   if (!bot || !bot.owner() || state.paused || env('SOCIAL_ENABLED') === '0') return;
@@ -241,6 +256,11 @@ async function onCommand(cmd, arg, chatId) {
       if (!ig.configured()) return send('Instagram non è ancora collegato: /social per lo stato.');
       return doPublishInstagram(it, chatId);
     }
+    case 'rinnovatoken': {
+      await refreshIgToken({ force: true });
+      const quando = state.igTokenAt ? new Date(state.igTokenAt).toLocaleDateString('it-IT') : 'mai';
+      return send(`Token Instagram: ultimo rinnovo ${esc(quando)}. Usa /social per verificarlo.`);
+    }
     case 'social': {
       const righe = ['<b>Collegamenti social</b>'];
       if (ig.configured()) {
@@ -300,7 +320,7 @@ function init({ app, dataDir, adminAuth, blog }) {
 
   bot.registerModule({
     name: 'social',
-    commands: ['reel', 'reels', 'pubblicato', 'rimanda', 'reelpausa', 'reelriprendi', 'pubblicareel', 'social'],
+    commands: ['reel', 'reels', 'pubblicato', 'rimanda', 'reelpausa', 'reelriprendi', 'pubblicareel', 'social', 'rinnovatoken'],
     prefixes: ['rl'],
     help: HELP,
     onCommand,
@@ -315,6 +335,9 @@ function init({ app, dataDir, adminAuth, blog }) {
     catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  if (state.igToken) ig.setToken(state.igToken);
+  setTimeout(() => { refreshIgToken().catch(() => {}); }, 90 * 1000);
+  setInterval(() => { refreshIgToken().catch(() => {}); }, 24 * 3600 * 1000);
   setInterval(() => { tick().catch(e => warn('tick:', e.message)); }, 5 * 60 * 1000);
   setTimeout(() => { tick().catch(e => warn('tick:', e.message)); }, 60 * 1000);
   const next = items().find(it => !isDone(it.id));

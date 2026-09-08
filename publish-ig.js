@@ -15,7 +15,9 @@
 const env = (k, d = '') => (process.env[k] || d).trim();
 const HOST = () => env('IG_GRAPH_HOST', 'graph.instagram.com');
 const VER = () => env('IG_API_VERSION', 'v23.0');
-const TOKEN = () => env('IG_ACCESS_TOKEN');
+let dynamicToken = null;   // token rinnovato, salvato nello stato (vince sulla variabile d'ambiente)
+const setToken = (t) => { dynamicToken = t || null; };
+const TOKEN = () => dynamicToken || env('IG_ACCESS_TOKEN');
 const USER = () => env('IG_USER_ID');
 const log = (...a) => console.log('[IG]', ...a);
 const warn = (...a) => console.warn('[IG]', ...a);
@@ -98,4 +100,4 @@ async function refreshToken() {
   throw new Error('rinnovo automatico disponibile solo con graph.instagram.com');
 }
 
-module.exports = { configured, me, publishReel, quota, refreshToken, host: HOST };
+module.exports = { configured, me, publishReel, quota, refreshToken, setToken, host: HOST };
