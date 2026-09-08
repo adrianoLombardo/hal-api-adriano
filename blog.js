@@ -874,6 +874,13 @@ async function onMessage(msg) {
       default:
         if (cmd) return send(chatId, 'Comando sconosciuto. /aiuto');
         if (!text) return;
+        {
+          const waiting = modules.find(m => m.wantsText && m.wantsText());
+          if (waiting) {
+            try { return await waiting.onText(text, chatId); }
+            catch (e) { warn(`modulo ${waiting.name}:`, e.message); return send(chatId, `❌ ${esc((e.message || '').slice(0, 300))}`); }
+          }
+        }
         if (!pending) return send(chatId, 'Nessuna bozza in attesa a cui applicare la correzione. Usa /nuovo per un articolo nuovo.');
         if (/^genera (l'|la |un'|una )?(immagine|copertina|foto)/i.test(text)) {
           await send(chatId, '🖼 Genero una copertina per questo articolo…');

@@ -53,11 +53,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
  * Pubblica un reel. videoUrl deve essere raggiungibile pubblicamente (Meta lo scarica).
  * → { id, permalink }
  */
-async function publishReel({ videoUrl, caption = '', coverUrl = null, shareToFeed = true, onProgress = () => {} }) {
+const clean = (u) => String(u || '').trim().replace(/^@+/, '');
+async function publishReel({ videoUrl, caption = '', coverUrl = null, shareToFeed = true, userTags = [], collaborators = [], locationId = null, onProgress = () => {} }) {
   if (!configured()) throw new Error('Instagram non configurato: mancano IG_USER_ID e IG_ACCESS_TOKEN');
   if (!videoUrl) throw new Error('videoUrl mancante');
   const params = { media_type: 'REELS', video_url: videoUrl, caption: String(caption).slice(0, 2200), share_to_feed: shareToFeed ? 'true' : 'false' };
   if (coverUrl) params.cover_url = coverUrl;
+  // persone taggate nel reel: solo il nome utente (niente coordinate, che valgono per le foto)
+  const tags = (userTags || []).map(clean).filter(Boolean).slice(0, 20);
+  if (tags.length) params.user_tags = JSON.stringify(tags.map(username => ({ username })));
+  // collaboratori: max 3, devono accettare l'invito dall'app Instagram
+  const collab = (collaborators || []).map(clean).filter(Boolean).slice(0, 3);
+  if (collab.length) params.collaborators = JSON.stringify(collab);
+  if (locationId) params.location_id = String(locationId);
   log('creo il contenitore…');
   const container = await api(`${USER()}/media`, { method: 'POST', params });
   const id = container.id;

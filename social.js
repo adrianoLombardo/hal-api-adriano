@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ig = require('./publish-ig');
+const fb = require('./publish-fb');
 const tiktok = require('./publish-tiktok');
 
 const env = (k, d = '') => (process.env[k] || d).trim();
@@ -28,7 +29,7 @@ let state = null;
 let busy = false;
 
 /* ── stato ── */
-function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {}, igToken: null, igTokenAt: null }; }
+function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {}, igToken: null, igTokenAt: null, edits: {} }; }
 function loadState() {
   try { state = Object.assign(defaultState(), JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))); }
   catch (e) { state = defaultState(); }
@@ -38,11 +39,14 @@ function plan() {
   try { return JSON.parse(fs.readFileSync(PLAN_FILE, 'utf8')); } catch (e) { return { items: [] }; }
 }
 /** reel in calendario, con la data eventualmente rimandata da Adriano */
+const withEdits = (it) => ({ ...it, ...(state.edits[it.id] || {}), date: state.postponed[it.id] || it.date });
 function items() {
-  return plan().items.map(it => ({ ...it, date: state.postponed[it.id] || it.date }))
+  return plan().items.map(withEdits)
     .filter(it => !it.skipped)
     .sort((a, b) => (a.date || '9').localeCompare(b.date || '9'));
 }
+function findItem(id) { const it = plan().items.find(x => x.id === id); return it ? withEdits(it) : null; }
+function setEdit(id, patch) { state.edits[id] = { ...(state.edits[id] || {}), ...patch }; saveState(); }
 const isDone = (id) => !!(state.done[id] && state.done[id].instagram);
 
 /* ── date in Europa/Roma ── */
@@ -76,6 +80,13 @@ function todayIso() { const r = romeParts(Date.now()); return `${r.y}-${String(r
 const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const pre = (s) => `<pre>${esc(s)}</pre>`;           // blocco con copia in un tocco sui client mobili
 const igFull = (it) => `${it.instagram}\n\n${it.hashtags.join(' ')}`;
+const at = (u) => '@' + String(u || '').replace(/^@+/, '');
+const tagLine = (it) => {
+  const p = [];
+  if ((it.userTags || []).length) p.push(`🏷 Tag: ${it.userTags.map(at).join(' ')}`);
+  if ((it.collaborators || []).length) p.push(`🤝 Collaboratori: ${it.collaborators.map(at).join(' ')}`);
+  return p.join('\n');
+};
 /** secondo del fotogramma consigliato per la copertina: "0,3 s, silhouette…" → "0,3 s" (la virgola è decimale) */
 const coverTime = (it) => { const m = /^\s*([\d]+(?:[.,]\d+)?\s*s)/.exec(it.coverNote || ''); return m ? m[1] : ''; };
 const sendHour = () => Math.min(23, Math.max(0, Number(env('SOCIAL_HOUR', '18')) || 18));
@@ -89,6 +100,8 @@ function keyboard(it) {
   else rows.push([{ text: '✅ Pubblicato su Instagram', callback_data: `rl:ig:${it.id}` }]);
   if (tiktok.configured()) rows.push([{ text: tiktok.direct() ? '🚀 Pubblica su TikTok' : '📥 Manda a TikTok (bozza)', callback_data: `rl:ptt:${it.id}` }]);
   else rows.push([{ text: '🎵 Pubblicato su TikTok', callback_data: `rl:tt:${it.id}` }]);
+  if (fb.configured()) rows.push([{ text: '📘 Pubblica su Facebook', callback_data: `rl:pfb:${it.id}` }]);
+  rows.push([{ text: '✏️ Cambia didascalia', callback_data: `rl:edcap:${it.id}` }, { text: '🏷 Tag e collaboratori', callback_data: `rl:edtag:${it.id}` }]);
   rows.push([{ text: '⏭ Rimanda di 3 giorni', callback_data: `rl:pp:${it.id}` }]);
   if (ig.configured()) rows.push([{ text: '✍️ L\'ho pubblicato a mano', callback_data: `rl:ig:${it.id}` }]);
   return { inline_keyboard: rows };
@@ -100,13 +113,26 @@ async function doPublishInstagram(it, chatId) {
   await send(`🚀 Pubblico il reel ${it.reel} su Instagram. Il caricamento richiede uno o due minuti…`);
   const r = await ig.publishReel({
     videoUrl: it.video, caption: igFull(it), coverUrl: it.cover, shareToFeed: true,
+    userTags: it.userTags || [], collaborators: it.collaborators || [],
     onProgress: (st) => log(`reel ${it.id}: ${st}`),
   });
   const d = state.done[it.id] || {}; d.instagram = Date.now(); d.instagramId = r.id; d.permalink = r.permalink || null;
   state.done[it.id] = d; saveState();
   const next = items().find(x => !isDone(x.id));
   await send(`✅ <b>Pubblicato su Instagram</b>${r.permalink ? `\n${r.permalink}` : ''}\n\nRicordati della copertina: in Instagram puoi cambiarla dal fotogramma a ${esc(coverTime(it) || '—')}.${next ? `\nProssimo: reel ${next.reel} · ${esc(next.title)} — ${esc(dateIt(next.date))}.` : ''}`);
+  if (fb.configured()) await send('📘 Vuoi anche su Facebook? Premi «Pubblica su Facebook» qui sopra.');
   if (tiktok.configured()) await send('Alle 20:00 ti ricordo TikTok, oppure premi ora il pulsante di TikTok qui sopra.');
+}
+
+async function doPublishFacebook(it, chatId) {
+  const send = (t) => bot.send(chatId, t);
+  await send(`📘 Pubblico il reel ${it.reel} sulla Pagina Facebook…`);
+  const r = await fb.publishReel({ videoUrl: it.video, description: igFull(it), onProgress: (st) => log(`reel ${it.id} facebook: ${st}`) });
+  const d = state.done[it.id] || {}; d.facebook = Date.now(); d.facebookId = r.id; d.facebookLink = r.permalink || null;
+  state.done[it.id] = d; saveState();
+  await send(r.pending
+    ? `📘 Reel ${it.reel} caricato su Facebook: sta ancora elaborando, comparirà tra qualche minuto.\n${esc(r.permalink)}`
+    : `✅ <b>Pubblicato su Facebook</b>\n${esc(r.permalink)}`);
 }
 
 async function doPublishTikTok(it, chatId) {
@@ -136,7 +162,8 @@ async function sendPackage(it, chatId, { manual = false } = {}) {
       await bot.send(to, `${head}\n\n⚠️ Video non allegato (${esc((e.message || '').slice(0, 120))}). Scaricalo qui: ${it.video}`);
     }
     try { await bot.tg('sendPhoto', { chat_id: to, photo: it.cover, caption: `Copertina consigliata${it.coverNote ? ' (' + esc(it.coverNote) + ')' : ''}. Puoi anche sceglierla dalla timeline in Instagram.`, parse_mode: 'HTML' }); } catch (e) { warn('copertina:', e.message); }
-    await bot.send(to, `📄 <b>Didascalia Instagram</b> — tocca per copiare\n${pre(igFull(it))}`);
+    const tl = tagLine(it);
+    await bot.send(to, `📄 <b>Didascalia Instagram</b> — tocca per copiare\n${pre(igFull(it))}${tl ? '\n' + esc(tl) : ''}`);
     let extra = `🎵 <b>TikTok</b> (${esc(it.tiktokTime)}) — tocca per copiare\n${pre(it.tiktok)}`;
     if (it.alt) extra += `\n\n♿ <b>Testo alternativo</b> (Instagram → Impostazioni avanzate)\n${pre(it.alt)}`;
     if (it.english) extra += `\n\n🇬🇧 <i>Versione inglese, se la vuoi aggiungere:</i>\n${pre(it.english)}`;
@@ -185,6 +212,42 @@ async function tick() {
   }
 }
 
+/* ── revisione del testo: il prossimo messaggio libero arriva qui ── */
+let awaiting = null;   // { id, field: 'caption' | 'tags', chatId }
+
+function parseHandles(text) {
+  const [left, right] = String(text).split('|');
+  const grab = (s) => (s || '').split(/[\s,;]+/).map(x => x.trim().replace(/^@+/, '')).filter(x => /^[a-z0-9._]{1,30}$/i.test(x));
+  return { tags: grab(left), collaborators: grab(right).slice(0, 3) };
+}
+
+async function onText(text, chatId) {
+  if (!awaiting) return;
+  const it = findItem(awaiting.id);
+  const field = awaiting.field;
+  if (/^annulla$/i.test(text.trim())) { awaiting = null; return bot.send(chatId, 'Lasciato com\'era.'); }
+  if (!it) { awaiting = null; return bot.send(chatId, 'Reel non trovato.'); }
+  if (field === 'caption') {
+    const hashtags = (text.match(/#[\p{L}\p{N}_]+/gu) || []);
+    const body = text.replace(/\n?(#[\p{L}\p{N}_]+\s*)+$/u, '').trim();
+    setEdit(it.id, { instagram: body, ...(hashtags.length ? { hashtags } : {}) });
+    awaiting = null;
+    const nuovo = findItem(it.id);
+    return bot.send(chatId, `✏️ <b>Didascalia aggiornata</b> per il reel ${it.reel}. Ecco come esce:\n${pre(igFull(nuovo))}${tagLine(nuovo) ? '\n' + esc(tagLine(nuovo)) : ''}`, { reply_markup: keyboard(nuovo) });
+  }
+  if (field === 'tags') {
+    if (/^nessuno$/i.test(text.trim())) { setEdit(it.id, { userTags: [], collaborators: [] }); }
+    else {
+      const { tags, collaborators } = parseHandles(text);
+      if (!tags.length && !collaborators.length) return bot.send(chatId, 'Non ho riconosciuto nomi utente validi. Riprova, per esempio: <code>@holyclub @sublimetecnologico | @holyclub</code>');
+      setEdit(it.id, { userTags: tags, collaborators });
+    }
+    awaiting = null;
+    const nuovo = findItem(it.id);
+    return bot.send(chatId, `🏷 <b>Aggiornato</b> per il reel ${it.reel}.\n${esc(tagLine(nuovo) || 'Nessun tag e nessun collaboratore.')}\n\n<i>I profili taggati devono permettere i tag; i collaboratori ricevono un invito da accettare nell'app.</i>`, { reply_markup: keyboard(nuovo) });
+  }
+}
+
 /* ── comandi ── */
 function statusText() {
   const list = items();
@@ -203,7 +266,7 @@ function statusText() {
     pub.length ? `Già pubblicati a mano: ${pub.join(', ')}` : '',
     held.length ? `In attesa (non opere): ${held.join(' · ')} — /reel <numero> per mandarne uno` : '',
     '',
-    `Pubblicazione: Instagram ${ig.configured() ? 'automatica' : 'a mano'} · TikTok ${tiktok.configured() ? (tiktok.direct() ? 'automatica' : 'in bozza') : 'a mano'}`,
+    `Pubblicazione: Instagram ${ig.configured() ? 'automatica' : 'a mano'} · Facebook ${fb.configured() ? 'automatica' : 'a mano'} · TikTok ${tiktok.configured() ? (tiktok.direct() ? 'automatica' : 'in bozza') : 'a mano'}`,
     'Legenda: • in attesa · 📤 inviato · 📸 su Instagram · ✅ anche su TikTok',
   ].filter(Boolean).join('\n');
 }
@@ -211,7 +274,10 @@ function statusText() {
 const HELP = `Reel (Instagram e TikTok):
 /reel — manda subito il prossimo pacchetto (anche: /reel 3)
 /reels — calendario e stato
+/didascalia 3 — riscrivi la didascalia del reel 3
+/tag 3 — scegli chi taggare e i collaboratori
 /pubblicareel 3 — pubblica subito il reel 3 su Instagram
+/pubblicafb 3 — pubblica il reel 3 sulla Pagina Facebook
 /social — stato dei collegamenti Instagram e TikTok
 /pubblicato 3 — segna il reel 3 come pubblicato (se l'hai fatto a mano)
 /rimanda 3 — sposta il reel 3 di 3 giorni
@@ -220,7 +286,8 @@ const HELP = `Reel (Instagram e TikTok):
 function findReel(arg) {
   const n = String(arg || '').replace(/[^0-9]/g, '');
   if (!n) return null;
-  return items().find(it => it.reel === Number(n)) || plan().items.find(it => it.reel === Number(n)) || null;
+  const raw = plan().items.find(it => it.reel === Number(n));
+  return items().find(it => it.reel === Number(n)) || (raw ? withEdits(raw) : null);
 }
 
 async function onCommand(cmd, arg, chatId) {
@@ -256,10 +323,24 @@ async function onCommand(cmd, arg, chatId) {
       if (!ig.configured()) return send('Instagram non è ancora collegato: /social per lo stato.');
       return doPublishInstagram(it, chatId);
     }
+    case 'pubblicafb': {
+      const it = findReel(arg) || items().find(x => !isDone(x.id));
+      if (!it) return send('Quale reel? Esempio: /pubblicafb 3');
+      if (!fb.configured()) return send('Facebook non è ancora collegato: /social per lo stato.');
+      return doPublishFacebook(it, chatId);
+    }
     case 'rinnovatoken': {
       await refreshIgToken({ force: true });
       const quando = state.igTokenAt ? new Date(state.igTokenAt).toLocaleDateString('it-IT') : 'mai';
       return send(`Token Instagram: ultimo rinnovo ${esc(quando)}. Usa /social per verificarlo.`);
+    }
+    case 'didascalia': case 'tag': {
+      const it = findReel(arg);
+      if (!it) return send(`Quale reel? Esempio: /${cmd} 3`);
+      awaiting = { id: it.id, field: cmd === 'didascalia' ? 'caption' : 'tags', chatId };
+      return send(cmd === 'didascalia'
+        ? `✏️ Mandami la nuova didascalia del reel ${it.reel}. Ecco quella attuale:\n${pre(igFull(findItem(it.id)))}`
+        : `🏷 Mandami i nomi utente da taggare nel reel ${it.reel} (collaboratori dopo una barra verticale).\nOra: ${esc(tagLine(findItem(it.id)) || 'nessuno')}`);
     }
     case 'social': {
       const righe = ['<b>Collegamenti social</b>'];
@@ -271,6 +352,14 @@ async function onCommand(cmd, arg, chatId) {
         try { const m = await tiktok.me(); righe.push(`🎵 TikTok: collegato come ${esc(m.display_name || m.open_id || '?')} — modalità ${tiktok.direct() ? 'pubblicazione diretta' : 'bozza'}`); }
         catch (e) { righe.push(`🎵 TikTok: token NON valido — ${esc((e.message || '').slice(0, 160))}`); }
       } else righe.push('🎵 TikTok: non configurato (TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REFRESH_TOKEN)');
+      if (fb.configured()) {
+        try {
+          const m = await fb.me();
+          let nota = '';
+          try { const t = await fb.tokenInfo(); nota = t.expiresAt ? ` — token valido fino al ${new Date(t.expiresAt * 1000).toLocaleDateString('it-IT')}` : ' — token senza scadenza'; } catch (e) {}
+          righe.push(`📘 Facebook: Pagina «${esc(m.name || m.id)}»${esc(nota)}`);
+        } catch (e) { righe.push(`📘 Facebook: token NON valido — ${esc((e.message || '').slice(0, 160))}`); }
+      } else righe.push('📘 Facebook: non configurato (FB_PAGE_ID, FB_PAGE_TOKEN)');
       return send(righe.join('\n'));
     }
     case 'reelpausa': state.paused = true; saveState(); return send('Promemoria dei reel in pausa. /reelriprendi per riattivarli.');
@@ -280,7 +369,7 @@ async function onCommand(cmd, arg, chatId) {
 
 async function onCallback(action, id, cb) {
   const chatId = cb.message && cb.message.chat && cb.message.chat.id;
-  const it = plan().items.find(x => x.id === id);
+  const it = findItem(id);
   if (!it) return bot.send(chatId, 'Reel non trovato.');
   const d = state.done[it.id] || { instagram: null, tiktok: null };
   if (action === 'ig') {
@@ -302,6 +391,17 @@ async function onCallback(action, id, cb) {
     try { return await doPublishTikTok(it, chatId); }
     catch (e) { warn('pubblicazione TikTok:', e.message); return bot.send(chatId, `❌ TikTok non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>`); }
   }
+  if (action === 'pfb') {
+    if (d.facebookId) return bot.send(chatId, `Il reel ${it.reel} è già su Facebook${d.facebookLink ? ': ' + d.facebookLink : ''}.`);
+    try { return await doPublishFacebook(it, chatId); }
+    catch (e) { warn('pubblicazione Facebook:', e.message); return bot.send(chatId, `❌ Facebook non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>`); }
+  }
+  if (action === 'edcap' || action === 'edtag') {
+    awaiting = { id: it.id, field: action === 'edcap' ? 'caption' : 'tags', chatId };
+    return bot.send(chatId, action === 'edcap'
+      ? `✏️ Mandami la <b>nuova didascalia</b> del reel ${it.reel} in un messaggio.\nGli hashtag li rimetto io in fondo (${it.hashtags.length}); se ne scrivi di tuoi uso i tuoi.\nScrivi <code>annulla</code> per lasciare tutto com'è.`
+      : `🏷 Mandami i nomi utente da taggare nel reel ${it.reel}, separati da spazio.\nPer i collaboratori (massimo 3, devono accettare l'invito su Instagram) scrivili dopo una barra verticale:\n<code>@holyclub @sublimetecnologico | @holyclub</code>\nScrivi <code>nessuno</code> per toglierli, <code>annulla</code> per lasciare tutto com'è.`);
+  }
   if (action === 'pp') {
     if (!it.date) return bot.send(chatId, 'Questo reel non è in calendario.');
     state.postponed[it.id] = addDays(state.postponed[it.id] || it.date, 3);
@@ -320,11 +420,13 @@ function init({ app, dataDir, adminAuth, blog }) {
 
   bot.registerModule({
     name: 'social',
-    commands: ['reel', 'reels', 'pubblicato', 'rimanda', 'reelpausa', 'reelriprendi', 'pubblicareel', 'social', 'rinnovatoken'],
+    commands: ['reel', 'reels', 'pubblicato', 'rimanda', 'reelpausa', 'reelriprendi', 'pubblicareel', 'pubblicafb', 'social', 'rinnovatoken', 'didascalia', 'tag'],
     prefixes: ['rl'],
     help: HELP,
     onCommand,
     onCallback,
+    wantsText: () => !!awaiting,
+    onText,
   });
 
   app.get('/api/admin/reels', adminAuth, (req, res) => res.json({ status: statusText(), state }));
