@@ -33,37 +33,11 @@ const SEMANTIC_THRESHOLD = 3;      // min similar episodes before pattern promot
    UTILITY: Call Claude Haiku
    ──────────────────────────────────────────────── */
 async function callClaude(system, userMessage, maxTokens = 200) {
-  const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
-  if (!apiKey) {
-    console.warn('[MEMORY-ENGINE] No ANTHROPIC_API_KEY — skipping LLM call');
-    return null;
-  }
-
   try {
-    const res = await fetch(CLAUDE_API, {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': CLAUDE_VERSION,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: CLAUDE_MODEL,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: 'user', content: userMessage }],
-      }),
-    });
-
-    if (!res.ok) {
-      console.warn(`[MEMORY-ENGINE] Claude API error: ${res.status}`);
-      return null;
-    }
-
-    const data = await res.json();
-    return data.content?.[0]?.text || null;
+    const out = await require('./llm').complete({ system, messages: [{ role: 'user', content: userMessage }], maxTokens, json: true });
+    return out.text || null;
   } catch (e) {
-    console.warn('[MEMORY-ENGINE] Claude call failed:', e.message);
+    console.warn('[MEMORY-ENGINE] LLM call failed:', (e.message || '').slice(0, 160));
     return null;
   }
 }

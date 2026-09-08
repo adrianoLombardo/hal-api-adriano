@@ -31,30 +31,11 @@ const SEARCH_CACHE_TTL = 24 * 3600000; // 24h
    UTILITY: Call Claude Haiku
    ──────────────────────────────────────────────── */
 async function callClaude(apiKey, system, userMessage, maxTokens = 200) {
-  if (!apiKey) return null;
   try {
-    const res = await fetch(CLAUDE_API, {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': CLAUDE_VERSION,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: CLAUDE_MODEL,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: 'user', content: userMessage }],
-      }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    let text = data.content?.[0]?.text || '';
-    // Strip markdown fences
-    text = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-    return text;
+    const out = await require('./llm').complete({ system, messages: [{ role: 'user', content: userMessage }], maxTokens, json: true });
+    return (out.text || '').trim();
   } catch (e) {
-    console.warn('[AUTONOMY] Claude call error:', e.message);
+    console.warn('[AUTONOMY] LLM call error:', (e.message || '').slice(0, 160));
     return null;
   }
 }

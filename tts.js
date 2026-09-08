@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════
    HAL 9000 — TTS providers (voce)
-   Catena: ElevenLabs → OpenAI → Azure → Edge (gratis, senza chiave)
+   Catena: ElevenLabs → OpenAI → Azure → Gemini (gratis con chiave) → Edge (gratis, senza chiave)
    Ogni provider restituisce { audio: Buffer, mime, provider, voice }.
    La lingua (it/en) sceglie la voce: HAL parla nella lingua dell'utente.
    ──────────────────────────────────────────────── */
@@ -35,7 +35,7 @@ const VOICE = {
   elevenlabs: () => env('ELEVENLABS_VOICE_ID', 'q2LDrL29FLqRR3XanHLq'),
 };
 // Prosodia HAL: calmo, appena più lento del normale; niente pitch shift (deforma le voci neurali)
-const PROSODY = { it: { rate: env('HAL_VOICE_RATE_IT', '-5%'), pitch: env('HAL_VOICE_PITCH_IT', '+0Hz') }, en: { rate: env('HAL_VOICE_RATE_EN', '-6%'), pitch: env('HAL_VOICE_PITCH_EN', '+0Hz') } };
+const PROSODY = { it: { rate: env('HAL_VOICE_RATE_IT', '-5%'), pitch: env('HAL_VOICE_PITCH_IT', '-12%') }, en: { rate: env('HAL_VOICE_RATE_EN', '-6%'), pitch: env('HAL_VOICE_PITCH_EN', '-8%') } };
 
 /* ── Pronuncia: sigle e nomi che i motori leggono male ("HAL" → "acca a elle") ── */
 function normalizeForSpeech(text, lang = 'it') {
@@ -65,11 +65,16 @@ const HAL_STYLE = {
 function escapeXml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
+const EN_TERMS = /\b(Hal|Neuro Flow|creative technologist|Holy Club|Liquid Thoughts|Sailing Through Memories|The Cathedral|Interconnection|Fake Machine|The Contact|Touch Designer|projection mapping|light design|Bright Festival|Sublime|showreel)\b/gi;
 function ssmlFor(text, lang, voice) {
   const p = PROSODY[lang] || PROSODY.it;
   const xmlLang = lang === 'en' ? 'en-US' : 'it-IT';
+  if (/^\s*<speak/i.test(text)) return text; // SSML già pronto (test/varianti)
+  let body = escapeXml(text);
+  // <lang> funziona solo su Azure (Edge chiude la connessione): sui multilingue Azure i nomi inglesi vengono letti in inglese
+  if (lang !== 'en' && /Multilingual/i.test(voice) && env('HAL_SSML_LANG_TAGS', '0') === '1') body = body.replace(EN_TERMS, (m) => `<lang xml:lang="en-US">${m}</lang>`);
   return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='${xmlLang}'>` +
-    `<voice name='${voice}'><prosody pitch='${p.pitch}' rate='${p.rate}' volume='+0%'>${escapeXml(text)}</prosody></voice></speak>`;
+    `<voice name='${voice}'><prosody pitch='${p.pitch}' rate='${p.rate}' volume='+0%'>${body}</prosody></voice></speak>`;
 }
 
 /* ══════════════════════════════════════════════
@@ -137,6 +142,46 @@ async function azure(text, lang, signal) {
 }
 
 /* ══════════════════════════════════════════════
+   3b) Gemini TTS — voci neurali Google, stile guidato dal testo,
+       gratuito nel piano free della stessa GEMINI_API_KEY del cervello
+   ══════════════════════════════════════════════ */
+function pcmToWav(pcm, rate = 24000, channels = 1, bits = 16) {
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8);
+  h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(channels, 22);
+  h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * channels * bits / 8, 28); h.writeUInt16LE(channels * bits / 8, 32); h.writeUInt16LE(bits, 34);
+  h.write('data', 36); h.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([h, pcm]);
+}
+async function gemini(text, lang, signal) {
+  const key = env('GEMINI_API_KEY');
+  if (!key || env('HAL_TTS_GEMINI', '1') === '0') return null;
+  const model = env('GEMINI_TTS_MODEL', 'gemini-2.5-flash-preview-tts');
+  const voice = env('GEMINI_TTS_VOICE', 'Charon');
+  const style = lang === 'en'
+    ? env('GEMINI_TTS_STYLE_EN', 'Read the following as HAL 9000: calm, unhurried, low and even voice, courteous, faintly unsettling, natural English.')
+    : env('GEMINI_TTS_STYLE_IT', 'Leggi il testo seguente come HAL 9000: calmo, senza fretta, voce bassa e uniforme, cortese, appena inquietante, italiano naturale.');
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: 'POST', signal,
+    headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `${style}\n\n${text}` }] }],
+      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
+    }),
+  });
+  if (!res.ok) throw new Error(`Gemini TTS ${res.status} ${(await res.text().catch(() => '')).slice(0, 120)}`);
+  const data = await res.json();
+  const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+  const part = parts.find(x => x.inlineData && x.inlineData.data);
+  if (!part) throw new Error('Gemini TTS: nessun audio nella risposta');
+  const pcm = Buffer.from(part.inlineData.data, 'base64');
+  const mime = part.inlineData.mimeType || '';
+  if (/wav|mpeg|mp3|ogg/i.test(mime) && !/L16|pcm/i.test(mime)) return { audio: pcm, mime: mime.split(';')[0], provider: 'gemini', voice };
+  const rate = parseInt((mime.match(/rate=(\d+)/) || [])[1] || '24000', 10);
+  return { audio: pcmToWav(pcm, rate), mime: 'audio/wav', provider: 'gemini', voice };
+}
+
+/* ══════════════════════════════════════════════
    4) Edge Read Aloud — voci neurali Microsoft, gratis, senza chiave
       (stesso servizio usato da "Leggi ad alta voce" di Edge; API non ufficiale)
    ══════════════════════════════════════════════ */
@@ -162,8 +207,9 @@ async function edge(text, lang, signal, timeoutMs = 12000) {
   if (env('HAL_TTS_PROVIDER', 'auto') === 'none') return null;
   try { return await edgeOnce(text, lang, signal, timeoutMs); }
   catch (e) {
-    if (!/HTTP 40[13]/.test(e.message)) throw e;
-    return edgeOnce(text, lang, signal, timeoutMs); // dopo la correzione dello skew
+    if (signal && signal.aborted) throw e;
+    // un secondo tentativo: dopo la correzione dello skew (401/403) o su connessione chiusa dal server (transitoria)
+    return edgeOnce(text, lang, signal, timeoutMs);
   }
 }
 function edgeOnce(text, lang, signal, timeoutMs) {
@@ -226,7 +272,7 @@ function edgeOnce(text, lang, signal, timeoutMs) {
 /* ══════════════════════════════════════════════
    Catena provider + cache delle frasi ricorrenti (saluti)
    ══════════════════════════════════════════════ */
-const PROVIDERS = { elevenlabs, openai, azure, edge };
+const PROVIDERS = { elevenlabs, openai, azure, gemini, edge };
 function providerOrder() {
   const forced = env('HAL_TTS_PROVIDER', 'auto').toLowerCase();
   if (forced === 'none') return [];
@@ -235,6 +281,7 @@ function providerOrder() {
   if (env('ELEVENLABS_API_KEY')) order.push('elevenlabs');
   if (env('OPENAI_API_KEY')) order.push('openai');
   if (env('AZURE_TTS_KEY') && env('AZURE_TTS_REGION')) order.push('azure');
+  if (env('GEMINI_API_KEY') && env('HAL_TTS_GEMINI', '1') !== '0') order.push('gemini');
   order.push('edge');
   return order;
 }
@@ -290,4 +337,4 @@ function splitSentences(text, { minLen = 30 } = {}) {
   return out;
 }
 
-module.exports = { synthesize, available, providerOrder, detectLang, splitSentences, ssmlFor, normalizeForSpeech, PROSODY };
+module.exports = { synthesize, available, providerOrder, detectLang, splitSentences, ssmlFor, normalizeForSpeech, PROSODY, edge };
