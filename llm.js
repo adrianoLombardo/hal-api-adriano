@@ -18,8 +18,9 @@ const P = {
   },
   gemini: {
     keyVar: 'GEMINI_API_KEY', kind: 'openai', base: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    models: () => uniq([env('GEMINI_MODEL'), 'gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']),
-    visionModels: () => uniq([env('GEMINI_VISION_MODEL'), env('GEMINI_MODEL'), 'gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']),
+    // gemini-3.8-flash: 20 richieste/giorno sul piano free; poi la lista scoperta dall'API (lite prima). I 2.5 sono chiusi ai nuovi utenti.
+    models: () => uniq([env('GEMINI_MODEL'), 'gemini-3.8-flash']),
+    visionModels: () => uniq([env('GEMINI_VISION_MODEL'), env('GEMINI_MODEL'), 'gemini-3.8-flash']),
   },
   groq: {
     keyVar: 'GROQ_API_KEY', kind: 'openai', base: 'https://api.groq.com/openai/v1',
