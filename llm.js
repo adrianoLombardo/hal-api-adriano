@@ -55,6 +55,32 @@ function order() {
   return list.filter(n => env(P[n].keyVar));
 }
 
+const discovered = {}; // provider → { at, models: [...] } (lista modelli letta dall'API, cache 1 h)
+const lastErrors = []; // ultimi errori (diagnosi via /api/llm/status)
+function noteError(msg) { lastErrors.push(new Date().toISOString().slice(11, 19) + ' ' + msg.slice(0, 500)); if (lastErrors.length > 6) lastErrors.shift(); }
+
+/** Modelli "flash" disponibili per la chiave (solo Gemini): lite prima (quota più ampia), poi flash, versioni nuove prima */
+async function discoverModels(name, cfg, key) {
+  const c = discovered[name];
+  if (c && Date.now() - c.at < 3600 * 1000) return c.models;
+  let models = [];
+  try {
+    const res = await fetch(cfg.base + '/models', { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const data = await res.json();
+      const ids = (data.data || data.models || []).map(m => String(m.id || m.name || '').replace(/^models\//, ''));
+      const ok = ids.filter(id => /^gemini-\d+(\.\d+)?-flash(-lite)?(-\d+)?$/.test(id));
+      const ver = (id) => parseFloat((id.match(/gemini-(\d+(?:\.\d+)?)/) || [0, 0])[1]);
+      models = ok.sort((a, b) => (Number(/lite/.test(b)) - Number(/lite/.test(a))) || (ver(b) - ver(a)));
+      console.log(`[LLM] ${name}: modelli disponibili → ${models.join(', ') || 'nessuno'}`);
+    } else {
+      console.warn(`[LLM] ${name}: lista modelli ${res.status}`);
+    }
+  } catch (e) { console.warn(`[LLM] ${name}: lista modelli fallita: ${e.message}`); }
+  discovered[name] = { at: Date.now(), models };
+  return models;
+}
+
 const cooldown = {};   // provider → timestamp fino a cui è sospeso
 const badModel = {};   // "provider|model" → true (modello inesistente) oppure timestamp di fine pausa (quota 429)
 const usable = (n) => !(cooldown[n] > Date.now());
@@ -70,7 +96,7 @@ function modelsStatus() {
   return out;
 }
 function status() {
-  return { order: order(), available: available(), models: modelsStatus(), cooldown: Object.fromEntries(Object.entries(cooldown).filter(([, t]) => t > Date.now()).map(([k, t]) => [k, Math.round((t - Date.now()) / 1000) + 's'])) };
+  return { order: order(), available: available(), models: modelsStatus(), discovered: Object.fromEntries(Object.entries(discovered).map(([k, v]) => [k, v.models])), lastErrors, cooldown: Object.fromEntries(Object.entries(cooldown).filter(([, t]) => t > Date.now()).map(([k, t]) => [k, Math.round((t - Date.now()) / 1000) + 's'])) };
 }
 
 class LLMError extends Error {
@@ -131,7 +157,11 @@ async function request(opts, stream) {
     if (!usable(name)) continue;
     const cfg = P[name];
     const key = env(cfg.keyVar);
-    const models = needVision ? cfg.visionModels() : cfg.models();
+    let models = needVision ? cfg.visionModels() : cfg.models();
+    if (name === 'gemini') {
+      const extra = await discoverModels(name, cfg, key);
+      models = uniq(models.concat(extra));
+    }
     if (!models.length) continue;
     const pausedModels = models.filter(m => { const b = badModel[name + '|' + m]; return b === true || (typeof b === 'number' && b > Date.now()); });
     if (pausedModels.length === models.length) {
@@ -157,6 +187,7 @@ async function request(opts, stream) {
       let detail = body.slice(0, 300);
       try { detail = JSON.parse(body).error?.message || detail; } catch (e) {}
       errors.push(`${name}/${model}: ${res.status} ${detail.slice(0, 140)}`);
+      noteError(`${name}/${model}: ${res.status} ${body.slice(0, 500)}`);
       lastStatus = res.status;
       if (res.status === 400 && /reasoning_effort/i.test(detail) && !opts._noReasoningField) {
         return request({ ...opts, _noReasoningField: true }, stream); // riprova senza il campo
