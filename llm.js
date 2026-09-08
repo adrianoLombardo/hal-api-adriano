@@ -59,6 +59,7 @@ const cooldown = {};   // provider → timestamp fino a cui è sospeso
 const badModel = {};   // "provider|model" → modello inesistente
 const usable = (n) => !(cooldown[n] > Date.now());
 function available() { return order().filter(usable)[0] || 'none'; }
+function configured() { return order().length > 0; }
 function status() {
   return { order: order(), available: available(), cooldown: Object.fromEntries(Object.entries(cooldown).filter(([, t]) => t > Date.now()).map(([k, t]) => [k, Math.round((t - Date.now()) / 1000) + 's'])) };
 }
@@ -102,10 +103,13 @@ function buildRequest(name, cfg, key, model, opts, stream) {
   const sys = systemText(opts.system);
   if (sys) msgs.push({ role: 'system', content: sys });
   for (const m of opts.messages) msgs.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: toOpenAIContent(m.content) });
+  const isGemini = name === 'gemini';
+  const body = { model, max_tokens: isGemini ? Math.max(2048, (opts.maxTokens || 400) * 3) : (opts.maxTokens || 400), messages: msgs, ...(stream ? { stream: true } : {}) };
+  if (isGemini && !opts._noReasoningField) body.reasoning_effort = 'low'; // i modelli Gemini "pensano": tienilo corto
   return {
     url: cfg.base + '/chat/completions',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(cfg.headers || {}) },
-    body: { model, max_tokens: opts.maxTokens || 400, messages: msgs, ...(stream ? { stream: true } : {}) },
+    body,
   };
 }
 
@@ -139,6 +143,9 @@ async function request(opts, stream) {
       try { detail = JSON.parse(body).error?.message || detail; } catch (e) {}
       errors.push(`${name}/${model}: ${res.status} ${detail.slice(0, 140)}`);
       lastStatus = res.status;
+      if (res.status === 400 && /reasoning_effort/i.test(detail) && !opts._noReasoningField) {
+        return request({ ...opts, _noReasoningField: true }, stream); // riprova senza il campo
+      }
       if (res.status === 404 || (res.status === 400 && /model|not found|does not exist|decommissioned|unsupported/i.test(detail))) {
         badModel[name + '|' + model] = true; // modello sbagliato: prova il prossimo dello stesso provider
         continue;
@@ -149,7 +156,10 @@ async function request(opts, stream) {
     }
     if (providerDown) continue;
   }
-  const detail = errors.length ? errors.join(' | ').slice(0, 400) : 'nessuna chiave LLM configurata (ANTHROPIC_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, ...)';
+  const paused = order().filter(n => !usable(n));
+  const detail = errors.length ? errors.join(' | ').slice(0, 400)
+    : paused.length ? `provider in pausa dopo un errore di crediti/quota: ${paused.join(', ')} (riprovo tra pochi minuti)`
+    : 'nessuna chiave LLM configurata (ANTHROPIC_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, ...)';
   console.error('[LLM] tutti i provider falliti:', detail);
   throw new LLMError('Nessun modello disponibile: ' + detail, { status: lastStatus || 503, detail, provider: 'none' });
 }
@@ -206,4 +216,4 @@ async function stream(opts) {
   return { provider: name, model, tokens: tokens(), cancel: () => { try { res.body.cancel(); } catch (e) {} } };
 }
 
-module.exports = { complete, stream, available, order, status, LLMError };
+module.exports = { complete, stream, available, configured, order, status, LLMError };

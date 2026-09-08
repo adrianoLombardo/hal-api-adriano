@@ -571,7 +571,7 @@ async function autoLearn(userMsg, halResponse) {
     if (userMsg.length < 30 || isQuestion) return;
   }
 
-  const anthropicKey = llm.available() !== 'none' ? 'ok' : '';
+  const anthropicKey = llm.configured() ? 'ok' : '';
   if (!anthropicKey) return;
 
   try {
@@ -1050,7 +1050,7 @@ app.get('/api/admin/mem0', adminAuth, async (req, res) => {
    ──────────────────────────────────────────────── */
 app.post('/api/proactive', async (req, res) => {
   const { page, context, history, overlayOpen } = req.body;
-  const anthropicKey = llm.available() !== 'none' ? 'ok' : '';
+  const anthropicKey = llm.configured() ? 'ok' : '';
   if (!anthropicKey) return res.json({ text: null });
 
   const sessionId = req.headers['x-session-id'] || 'anonymous';
@@ -1167,7 +1167,7 @@ app.post('/api/speak', async (req, res) => {
   const { messages, vision } = req.body;
   if (!messages) return res.status(400).json({ error: 'messages required' });
 
-  const anthropicKey = llm.available() !== 'none' ? 'ok' : '';
+  const anthropicKey = llm.configured() ? 'ok' : '';
   const lastMsg = String(messages[messages.length - 1]?.content || '').slice(0, 4000);
   const lang = tts.detectLang(lastMsg, req.body.lang === 'en' ? 'en' : 'it');
   console.log(`\n[SPEAK] ← (${lang}) "${lastMsg.substring(0, 50)}..."`);
@@ -1322,7 +1322,7 @@ app.post('/api/speak/stream', async (req, res) => {
   const { messages, vision, worldmap } = req.body || {};
   if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: 'messages required' });
 
-  const anthropicKey = llm.available() !== 'none' ? 'ok' : '';
+  const anthropicKey = llm.configured() ? 'ok' : '';
   const lastMsg = String(messages[messages.length - 1]?.content || '').slice(0, 4000);
   const lang = tts.detectLang(lastMsg, req.body.lang === 'en' ? 'en' : 'it');
   console.log(`\n[STREAM] ← (${lang}) "${lastMsg.substring(0, 50)}..."`);
@@ -1561,7 +1561,7 @@ app.post('/api/chat', async (req, res) => {
   const { messages } = req.body;
   if (!messages) return res.status(400).json({ error: 'messages required' });
 
-  const anthropicKey = llm.available() !== 'none' ? 'ok' : '';
+  const anthropicKey = llm.configured() ? 'ok' : '';
   if (!anthropicKey) return res.json({ response: null, demo: true });
 
   const lastMsg = messages[messages.length - 1]?.content || '';
@@ -1619,7 +1619,7 @@ setInterval(() => {
    The consciousness cycle: reflect, feel, wonder
    ──────────────────────────────────────────────── */
 async function innerLoop() {
-  const anthropicKey = llm.available() !== 'none' ? 'ok' : '';
+  const anthropicKey = llm.configured() ? 'ok' : '';
   if (!anthropicKey) return;
 
   const age = getAgeDays();
@@ -1767,7 +1767,7 @@ setTimeout(innerLoop, 60 * 1000);
    ──────────────────────────────────────────────── */
 app.post('/api/vision', async (req, res) => {
   const { frame, context } = req.body;
-  const anthropicKey = llm.available() !== 'none' ? 'ok' : '';
+  const anthropicKey = llm.configured() ? 'ok' : '';
   if (!anthropicKey || !frame) {
     return res.status(400).json({ error: 'Missing frame or LLM key' });
   }
@@ -2056,7 +2056,7 @@ app.listen(PORT, () => {
       saveMemory,
       getAgeDays,
       getLifeStage,
-      ANTH_KEY: () => (llm.available() !== 'none' ? 'ok' : ''),
+      ANTH_KEY: () => (llm.configured() ? 'ok' : ''),
     });
     halAutonomy.start();
     console.log('  [BOOT] HAL Autonomy system ✓');
