@@ -2047,6 +2047,14 @@ app.post('/api/worldmap/visitor', async (req, res) => {
 });
 
 /* ══════════════════════════════════════════════════
+   BLOG AUTOMATICO — articolo ogni 10 giorni, approvazione su Telegram, pubblicazione FTP
+   ──────────────────────────────────────────────── */
+const blog = require('./blog');
+const PUBLIC_URL = (process.env.PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? 'https://' + process.env.RAILWAY_PUBLIC_DOMAIN : (process.env.RAILWAY_ENVIRONMENT ? 'https://web-production-09adc.up.railway.app' : ''))).trim();
+try { blog.init({ app, dataDir: DATA_DIR, adminAuth, publicUrl: PUBLIC_URL }); }
+catch (e) { console.error('[BLOG] init fallita:', e.message); }
+
+/* ══════════════════════════════════════════════════
    START
    ──────────────────────────────────────────────── */
 app.listen(PORT, () => {

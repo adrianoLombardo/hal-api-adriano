@@ -6,9 +6,11 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "basic-ftp": "^5.3.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
+    "sharp": "^0.34.5",
     "ws": "^8.19.0"
   }
 }

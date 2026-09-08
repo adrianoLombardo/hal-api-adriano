@@ -1,0 +1,333 @@
+{
+  "note": "Argomenti a rotazione per il blog automatico. Il server segna quelli usati in blog-state.json. Ogni voce: titolo di lavoro, angolo, tag, parole chiave SEO, copertina di riserva (immagine del sito) se Gemini non genera l'immagine.",
+  "topics": [
+    { "id": "brief-installazione",
+      "title": "Come scrivere il brief per un'installazione immersiva: le 12 informazioni che fanno risparmiare settimane",
+      "angle": "guida pratica per event manager e agenzie, con una checklist finale",
+      "tags": [
+        "Guida",
+        "Eventi",
+        "Brief"
+      ],
+      "keywords": "brief installazione immersiva, come commissionare installazione interattiva, agenzia eventi installazione",
+      "fallback": "/img/interconnection/1.jpg",
+      "fallbackAlt": "Interconnection, installazione immersiva audio video luce"
+    },
+    { "id": "touchdesigner-vs-notch",
+      "title": "TouchDesigner o Notch? Quando uso l'uno e quando l'altro nelle installazioni dal vivo",
+      "angle": "confronto onesto dal punto di vista di chi monta e fa la regia, non della software house",
+      "tags": [
+        "TouchDesigner",
+        "Notch",
+        "Strumenti"
+      ],
+      "keywords": "touchdesigner vs notch, software installazioni interattive, real time graphics live",
+      "fallback": "/img/hc/copertina.jpg",
+      "fallbackOg": "/img/hc/copertina.jpg",
+      "fallbackAlt": "Regia in tempo reale per installazione interattiva"
+    },
+    { "id": "sensori-interazione",
+      "title": "LIDAR, telecamere di profondità o EEG: quale sensore per quale installazione",
+      "angle": "spiegare i tre tipi di sensore con esempi concreti dalle mie opere, pro e contro, costi indicativi",
+      "tags": [
+        "Interazione",
+        "Sensori",
+        "Guida"
+      ],
+      "keywords": "sensori installazione interattiva, telecamera di profondità arte, lidar installazione",
+      "fallback": "/img/liquid/cover.jpg",
+      "fallbackAlt": "Liquid Thoughts, installazione interattiva con telecamera di profondità"
+    },
+    { "id": "spazio-buio",
+      "title": "Perché uno spazio buio vale più di un proiettore in più: preparare la location per un'installazione",
+      "angle": "consigli pratici su oscuramento, corrente, altezze, flussi di pubblico, con errori visti sul campo",
+      "tags": [
+        "Location",
+        "Eventi",
+        "Guida"
+      ],
+      "keywords": "location installazione immersiva, oscuramento sala evento, preparare spazio projection mapping",
+      "fallback": "/img/cathedral/1.jpg",
+      "fallbackAlt": "The Cathedral, fili e luce UV in uno spazio buio"
+    },
+    { "id": "eeg-cosa-misura",
+      "title": "Cosa misura davvero un headset EEG da 4 elettrodi, e cosa no",
+      "angle": "onestà scientifica: alpha, beta, theta, gamma, artefatti, cosa si può usare in un'installazione e cosa è marketing",
+      "tags": [
+        "EEG",
+        "Neuroscienze",
+        "Neuro.Flow"
+      ],
+      "keywords": "headset eeg muse cosa misura, eeg arte, onde cerebrali installazione",
+      "fallback": "/img/animus/cover.jpg",
+      "fallbackAlt": "Animus et Corpus, installazione EEG al Bright Festival"
+    },
+    { "id": "sincronia-due-cervelli",
+      "title": "Due cervelli si sincronizzano davvero? Il Phase Locking Value spiegato senza formule",
+      "angle": "divulgazione: cos'è la sincronia inter-cerebrale, cosa dice la ricerca, come la uso in Neuro.Flow",
+      "tags": [
+        "Neuro.Flow",
+        "Neuroscienze",
+        "Ricerca"
+      ],
+      "keywords": "phase locking value spiegato, sincronia cerebrale, hyperscanning arte",
+      "fallback": "/img/animus/cover.jpg",
+      "fallbackAlt": "Neuro.Flow, due partecipanti con headset EEG e sfera proiettata"
+    },
+    { "id": "mapping-architetturale",
+      "title": "Projection mapping su un edificio: le 7 cose da controllare prima di dire sì",
+      "angle": "checklist tecnica e burocratica per mapping su facciate: permessi, lumen, distanza, meteo, contenuti",
+      "tags": [
+        "Projection Mapping",
+        "Guida",
+        "Eventi"
+      ],
+      "keywords": "projection mapping edificio costi, videomapping facciata permessi, mapping architetturale",
+      "fallback": "/img/interconnection/1.jpg",
+      "fallbackAlt": "Proiezioni architetturali su grande superficie"
+    },
+    { "id": "installazione-permanente",
+      "title": "Installazione temporanea o permanente: cosa cambia in progettazione, costi e manutenzione",
+      "angle": "differenze concrete: hardware, ricambi, aggiornamenti, chi la gestisce dopo l'inaugurazione",
+      "tags": [
+        "Musei",
+        "Permanente",
+        "Guida"
+      ],
+      "keywords": "installazione permanente museo, manutenzione installazione interattiva, installazione temporanea evento",
+      "fallback": "/img/sansalvador/cover.jpg",
+      "fallbackAlt": "San Salvador, murales con fili fluorescenti e luce UV"
+    },
+    { "id": "generativo-vs-video",
+      "title": "Contenuti generativi o video prodotto: cosa conviene per un'installazione",
+      "angle": "quando il generativo vince (reattività, durata, costi) e quando serve il video, con esempi",
+      "tags": [
+        "Generativo",
+        "Contenuti",
+        "Guida"
+      ],
+      "keywords": "arte generativa installazione, contenuti generativi eventi, video vs generativo",
+      "fallback": "/img/liquid/cover.jpg",
+      "fallbackAlt": "Grafica generativa in tempo reale su pareti"
+    },
+    { "id": "test-persone-vere",
+      "title": "La regola dei tre secondi: perché testo ogni installazione con persone vere prima dell'evento",
+      "angle": "il metodo di test, cosa osservo, gli errori più comuni scoperti in prova",
+      "tags": [
+        "Processo",
+        "Interazione",
+        "Backstage"
+      ],
+      "keywords": "test installazione interattiva, user test esperienza immersiva, progettare interazione pubblico",
+      "fallback": "/img/hc/copertina.jpg",
+      "fallbackOg": "/img/hc/copertina.jpg",
+      "fallbackAlt": "Visitatori davanti a un'installazione interattiva"
+    },
+    { "id": "regia-evento",
+      "title": "Cosa fa la regia durante un evento immersivo, e perché non è un costo da tagliare",
+      "angle": "una serata raccontata dal banco regia: monitoraggio, imprevisti, adattamenti in tempo reale",
+      "tags": [
+        "Eventi",
+        "Regia",
+        "Backstage"
+      ],
+      "keywords": "regia evento immersivo, tecnico installazione evento, live show control",
+      "fallback": "/img/hc/copertina.jpg",
+      "fallbackOg": "/img/hc/copertina.jpg",
+      "fallbackAlt": "Banco regia con GrandMA3 e schermi durante un evento"
+    },
+    { "id": "luce-uv-fili",
+      "title": "Fili e luce UV: come nasce un'architettura di luce dal vuoto",
+      "angle": "processo di The Cathedral e San Salvador: materiali, tensione dei fili, lampade, tempi",
+      "tags": [
+        "Light Design",
+        "Processo",
+        "Opere"
+      ],
+      "keywords": "installazione fili luce uv, string art luce ultravioletta, architettura di luce",
+      "fallback": "/img/cathedral/1.jpg",
+      "fallbackAlt": "The Cathedral, archi di fili fluorescenti sotto luce UV"
+    },
+    { "id": "musei-interattivi",
+      "title": "Installazioni interattive nei musei: cosa funziona con il pubblico e cosa resta spento",
+      "angle": "esperienza diretta con visitatori di tutte le età, accessibilità, durata dell'interazione",
+      "tags": [
+        "Musei",
+        "Interazione",
+        "Guida"
+      ],
+      "keywords": "installazione interattiva museo, museo esperienziale, tecnologia nei musei",
+      "fallback": "/img/liquid/cover.jpg",
+      "fallbackAlt": "Visitatori che interagiscono con proiezioni generative"
+    },
+    { "id": "fiere-stand",
+      "title": "Uno stand che si ricorda: installazioni interattive in fiera senza sprecare il budget",
+      "angle": "vincoli delle fiere (rumore, luce, flusso), cosa attira davvero, esempi di soluzioni compatte",
+      "tags": [
+        "Fiere",
+        "Brand",
+        "Eventi"
+      ],
+      "keywords": "installazione interattiva stand fiera, stand esperienziale, attrarre visitatori fiera",
+      "fallback": "/img/hc/copertina.jpg",
+      "fallbackOg": "/img/hc/copertina.jpg",
+      "fallbackAlt": "Installazione interattiva per stand fieristico"
+    },
+    { "id": "retail-vetrine",
+      "title": "Vetrine e retail interattivi: quando la tecnologia vende e quando disturba",
+      "angle": "casi d'uso concreti, sensori discreti, contenuti che cambiano con chi passa, misurazione",
+      "tags": [
+        "Retail",
+        "Brand",
+        "Interazione"
+      ],
+      "keywords": "vetrina interattiva, retail esperienziale, installazione negozio",
+      "fallback": "/img/hc/copertina.jpg",
+      "fallbackOg": "/img/hc/copertina.jpg",
+      "fallbackAlt": "Installazione luminosa interattiva in uno spazio retail"
+    },
+    { "id": "grandma3-luce-dati",
+      "title": "Quando i dati pilotano la luce: collegare sensori e GrandMA3 in tempo reale",
+      "angle": "tecnico ma leggibile: OSC, ArtNet, mapping dei valori, latenza, esempi da Neuro.Flow",
+      "tags": [
+        "Light Design",
+        "GrandMA3",
+        "Tecnica"
+      ],
+      "keywords": "grandma3 osc artnet, luce controllata dai dati, light design interattivo",
+      "fallback": "/img/animus/cover.jpg",
+      "fallbackAlt": "Luci controllate dai dati EEG durante Neuro.Flow"
+    },
+    { "id": "partecipazione-telefono",
+      "title": "Far partecipare il pubblico dal telefono: QR, web app e niente da scaricare",
+      "angle": "come ho costruito Liquid Thoughts e Sailing Through Memories: moderazione, latenza, privacy",
+      "tags": [
+        "Interazione",
+        "Partecipazione",
+        "Tecnica"
+      ],
+      "keywords": "installazione partecipativa smartphone, qr code installazione interattiva, web app evento",
+      "fallback": "/img/liquid/cover.jpg",
+      "fallbackAlt": "Liquid Thoughts, partecipazione dal telefono tramite QR"
+    },
+    { "id": "errori-primo-progetto",
+      "title": "I 10 errori che vedo più spesso nel primo progetto immersivo di un brand",
+      "angle": "elenco ragionato con soluzione per ogni errore, tono diretto",
+      "tags": [
+        "Brand",
+        "Guida",
+        "Eventi"
+      ],
+      "keywords": "errori installazione immersiva, esperienza immersiva brand, evento immersivo consigli",
+      "fallback": "/img/interconnection/1.jpg",
+      "fallbackAlt": "Spazio immersivo con luce e proiezioni"
+    },
+    { "id": "sostenibilita-installazioni",
+      "title": "Installazioni immersive e consumo: proiettori, LED e come pesare meno",
+      "angle": "numeri realistici di consumo, riuso, scelte a basso impatto senza rinunciare all'effetto",
+      "tags": [
+        "Sostenibilità",
+        "Tecnica",
+        "Eventi"
+      ],
+      "keywords": "consumo energetico installazione, evento sostenibile tecnologia, led vs proiettore consumo",
+      "fallback": "/img/cathedral/1.jpg",
+      "fallbackAlt": "Installazione a luce UV a basso consumo"
+    },
+    { "id": "documentare-installazione",
+      "title": "Come documentare un'installazione perché viva oltre l'evento: video, foto, dati",
+      "angle": "cosa riprendere, con cosa, in che momento, e come ho fatto gli showreel",
+      "tags": [
+        "Documentazione",
+        "Video",
+        "Processo"
+      ],
+      "keywords": "documentare installazione artistica, video installazione immersiva, foto arte luce",
+      "fallback": "/img/sansalvador/cover.jpg",
+      "fallbackAlt": "Ripresa notturna di un'installazione luminosa"
+    },
+    { "id": "arte-scienza-collaborare",
+      "title": "Artisti e laboratori di ricerca: come impostare una collaborazione che funziona",
+      "angle": "cosa chiedono i ricercatori, cosa serve all'artista, protocolli, dati, pubblicazioni; l'esperienza di Neuro.Flow",
+      "tags": [
+        "Ricerca",
+        "Neuro.Flow",
+        "Collaborazioni"
+      ],
+      "keywords": "collaborazione arte scienza, art science project, ricerca universitaria arte digitale",
+      "fallback": "/img/animus/cover.jpg",
+      "fallbackAlt": "Neuro.Flow, ricerca aperta tra arte e neuroscienze"
+    },
+    { "id": "luce-emozione",
+      "title": "Perché la luce ci emoziona: tre cose che ho imparato accendendo spazi per dieci anni",
+      "angle": "riflessione personale ma concreta: contrasto, tempo, corpo; esempi dalle opere",
+      "tags": [
+        "Light Design",
+        "Riflessioni",
+        "Opere"
+      ],
+      "keywords": "luce ed emozione, light art significato, arte della luce",
+      "fallback": "/img/cathedral/1.jpg",
+      "fallbackAlt": "Geometrie di luce in uno spazio buio"
+    },
+    { "id": "tempi-produzione",
+      "title": "Da quattro a otto settimane: il calendario reale di un'installazione, settimana per settimana",
+      "angle": "timeline dettagliata brief → sopralluogo → concept → test → montaggio → live, con i punti critici",
+      "tags": [
+        "Processo",
+        "Eventi",
+        "Guida"
+      ],
+      "keywords": "tempi realizzazione installazione immersiva, quanto tempo installazione interattiva, pianificare evento immersivo",
+      "fallback": "/img/hc/copertina.jpg",
+      "fallbackOg": "/img/hc/copertina.jpg",
+      "fallbackAlt": "Montaggio di un'installazione immersiva"
+    },
+    { "id": "ai-generativa-installazioni",
+      "title": "Intelligenza artificiale nelle installazioni dal vivo: cosa funziona oggi in tempo reale",
+      "angle": "StreamDiffusion, modelli locali, latenza, dove l'AI aggiunge valore e dove è solo effetto",
+      "tags": [
+        "AI",
+        "Generativo",
+        "Tecnica"
+      ],
+      "keywords": "ai generativa installazione interattiva, streamdiffusion touchdesigner, intelligenza artificiale arte dal vivo",
+      "fallback": "/img/liquid/cover.jpg",
+      "fallbackAlt": "Grafica generativa in tempo reale"
+    }
+  ],
+  "existing": [
+    {
+      "url": "/blog/quanto-costa-installazione-immersiva.html",
+      "title": "Quanto costa un'installazione immersiva nel 2026: fasce di prezzo e voci di spesa"
+    },
+    {
+      "url": "/blog/installazioni-interattive-fiere-eventi-casi-reali.html",
+      "title": "Installazioni interattive per fiere ed eventi: 7 casi reali e cosa insegnano"
+    },
+    {
+      "url": "/blog/come-funziona-installazione-immersiva.html",
+      "title": "Come funziona un'installazione immersiva: tecnologia, design e progettazione"
+    },
+    {
+      "url": "/blog/eeg-brainwave-art-guida.html",
+      "title": "EEG brainwave art: come le onde cerebrali diventano arte"
+    },
+    {
+      "url": "/blog/touchdesigner-installazioni-interattive.html",
+      "title": "TouchDesigner per installazioni interattive: guida pratica"
+    },
+    {
+      "url": "/blog/light-design-eventi-guida.html",
+      "title": "Light design per eventi: guida completa alla progettazione illuminotecnica"
+    },
+    {
+      "url": "/blog/arte-generativa-guida-completa.html",
+      "title": "Arte generativa: cos'è, come funziona e come viene usata nelle installazioni"
+    },
+    {
+      "url": "/blog/bright-festival-2025-animus-et-corpus.html",
+      "title": "Animus et Corpus al Bright Festival 2025: quando il pensiero diventa luce"
+    }
+  ]
+}

@@ -1,3 +1,7 @@
 node_modules/
 .env
 hal-logs.json
+
+# blog automatico (stato e file di lavoro, solo locali)
+blog-state.json
+blog-work/
