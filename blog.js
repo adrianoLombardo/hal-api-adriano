@@ -233,7 +233,8 @@ async function writeArticle(topic, { feedback = [], previous = null } = {}) {
   }
   user += '\n\nScrivi ora l\'articolo nel formato richiesto.';
   let lastErr = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (attempt > 1) await new Promise(r => setTimeout(r, 20000 * (attempt - 1)));
     try {
       const r = await llm.complete({ system: systemPrompt(), messages: [{ role: 'user', content: user }], maxTokens: 7000, timeoutMs: 240000, json: true });
       const text = String(r.text || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
@@ -817,26 +818,38 @@ async function handleUpdate(u) {
 /* ── webhook (Railway) o polling (locale) ── */
 async function setupTelegram() {
   if (!TOKEN()) { log('TELEGRAM_BOT_TOKEN assente: blog automatico spento'); return; }
-  if (publicUrl) {
+  try { const me = await tg('getMe'); log(`bot @${me.username} pronto`); } catch (e) { warn('getMe fallito (token sbagliato?):', e.message); return; }
+  if (publicUrl && env('TELEGRAM_WEBHOOK') === '1') {
     try {
       await tg('setWebhook', { url: `${publicUrl}/api/telegram/webhook/${webhookSecret()}`, secret_token: webhookSecret(), allowed_updates: ['message', 'callback_query'], drop_pending_updates: false });
-      log('webhook Telegram impostato su', publicUrl);
+      const info = await tg('getWebhookInfo').catch(() => ({}));
+      log(`webhook Telegram impostato su ${publicUrl} · in coda: ${info.pending_update_count || 0}${info.last_error_message ? ' · ultimo errore: ' + info.last_error_message : ''}`);
     } catch (e) { warn('setWebhook fallito, passo al polling:', e.message); startPolling(); }
   } else startPolling();
-  try { const me = await tg('getMe'); log(`bot @${me.username} pronto`); } catch (e) { warn('getMe:', e.message); }
 }
 function startPolling() {
   if (pollingAbort) return;
   pollingAbort = { stop: false };
   const ctl = pollingAbort;
   (async () => {
-    try { await tg('deleteWebhook', { drop_pending_updates: false }); } catch (e) {}
-    log('polling Telegram attivo (locale)');
+    try { await tg('deleteWebhook', { drop_pending_updates: false }); } catch (e) { warn('deleteWebhook:', e.message); }
+    try { const info = await tg('getWebhookInfo'); log(`polling Telegram attivo · aggiornamenti in coda: ${info.pending_update_count || 0}${info.last_error_message ? ' · ultimo errore webhook: ' + info.last_error_message : ''}`); } catch (e) { log('polling Telegram attivo'); }
+    let failures = 0;
     while (!ctl.stop) {
       try {
         const updates = await tg('getUpdates', { offset: state.pollOffset || 0, timeout: 25, allowed_updates: ['message', 'callback_query'] });
-        for (const u of updates) { state.pollOffset = u.update_id + 1; saveState(); await handleUpdate(u); }
-      } catch (e) { warn('polling:', e.message); await new Promise(r => setTimeout(r, 5000)); }
+        failures = 0;
+        for (const u of updates) {
+          state.pollOffset = u.update_id + 1; saveState();
+          const m = u.message || (u.callback_query && u.callback_query.message) || {};
+          log(`update ${u.update_id}: ${u.callback_query ? 'pulsante ' + u.callback_query.data : 'messaggio "' + String(u.message && u.message.text || '').slice(0, 40) + '"'} da chat ${m.chat && m.chat.id}`);
+          await handleUpdate(u);
+        }
+      } catch (e) {
+        failures++;
+        warn('polling:', e.message);
+        await new Promise(r => setTimeout(r, Math.min(60000, 5000 * failures)));
+      }
     }
   })();
 }
@@ -887,9 +900,12 @@ function init({ app, dataDir, adminAuth, publicUrl: pu }) {
   // Telegram webhook
   app.post('/api/telegram/webhook/:secret', (req, res) => {
     const ok = TOKEN() && req.params.secret === webhookSecret() && String(req.headers['x-telegram-bot-api-secret-token'] || '') === webhookSecret();
-    if (!ok) return res.status(403).end();
+    if (!ok) { warn('webhook rifiutato (secret non valido) da', req.ip); return res.status(403).end(); }
     res.json({ ok: true });
-    handleUpdate(req.body || {});
+    const u = req.body || {};
+    const m = u.message || (u.callback_query && u.callback_query.message) || {};
+    log(`webhook update ${u.update_id}: ${u.callback_query ? 'pulsante ' + u.callback_query.data : 'messaggio "' + String(u.message && u.message.text || '').slice(0, 40) + '"'} da chat ${m.chat && m.chat.id}`);
+    handleUpdate(u);
   });
   // anteprima bozza (id casuale a 16 caratteri esadecimali, non indicizzata)
   app.get('/api/blog/preview/:id', (req, res) => {

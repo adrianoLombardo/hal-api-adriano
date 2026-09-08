@@ -207,6 +207,12 @@ async function request(opts, stream) {
         badModel[name + '|' + model] = true; // modello sbagliato: prova il prossimo dello stesso provider
         continue;
       }
+      if (res.status >= 500) {
+        // modello sovraccarico ("high demand"): pausa breve solo per lui, prova il successivo dello stesso provider
+        badModel[name + '|' + model] = Date.now() + 60 * 1000;
+        console.warn(`[LLM] ${name}/${model} ${res.status} → pausa 60 s: ${detail.slice(0, 160)}`);
+        continue;
+      }
       markFailure(name, res.status, detail);
       providerDown = true;
       break;
