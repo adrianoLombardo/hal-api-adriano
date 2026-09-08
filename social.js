@@ -146,11 +146,14 @@ function statusText() {
     return `${mark} ${it.date ? dateIt(it.date) : '—'} · reel ${it.reel} ${it.title}`;
   });
   const doneN = list.filter(it => isDone(it.id)).length;
-  const skipped = plan().items.filter(i => i.skipped).map(i => `reel ${i.reel}`);
+  const out = plan().items.filter(i => i.skipped);
+  const pub = out.filter(i => i.status !== 'hold').map(i => `reel ${i.reel}`);
+  const held = out.filter(i => i.status === 'hold').map(i => `reel ${i.reel} ${i.title}`);
   return [
     `Calendario reel — ${doneN} su ${list.length} pubblicati${state.paused ? ' (IN PAUSA)' : ''}`,
     ...rows,
-    skipped.length ? `Fuori calendario (già pubblicati a mano): ${skipped.join(', ')}` : '',
+    pub.length ? `Già pubblicati a mano: ${pub.join(', ')}` : '',
+    held.length ? `In attesa (non opere): ${held.join(' · ')} — /reel <numero> per mandarne uno` : '',
     '',
     'Legenda: • in attesa · 📤 inviato · 📸 su Instagram · ✅ anche su TikTok',
   ].filter(Boolean).join('\n');
