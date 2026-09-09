@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 
+const crypto = require('crypto');
 const ig = require('./publish-ig');
 const fb = require('./publish-fb');
 const tiktok = require('./publish-tiktok');
@@ -29,7 +30,7 @@ let state = null;
 let busy = false;
 
 /* ── stato ── */
-function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {}, igToken: null, igTokenAt: null, edits: {}, schedule: {} }; }
+function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {}, igToken: null, igTokenAt: null, edits: {}, schedule: {}, ttRefresh: null, ttOpenId: null, ttAt: null }; }
 function loadState() {
   try { state = Object.assign(defaultState(), JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))); }
   catch (e) { state = defaultState(); }
@@ -277,6 +278,7 @@ async function tick() {
 
 /* ── revisione del testo: il prossimo messaggio libero arriva qui ── */
 let awaiting = null;   // { id, field: 'caption' | 'tags', chatId }
+let ttState = null;    // csrf dell'autorizzazione TikTok in corso
 
 function parseHandles(text) {
   const [left, right] = String(text).split('|');
@@ -348,6 +350,7 @@ const HELP = `Reel (Instagram e TikTok):
 /tag 3 — scegli chi taggare e i collaboratori
 /pubblicareel 3 — pubblica subito il reel 3 su Instagram
 /pubblicafb 3 — pubblica il reel 3 sulla Pagina Facebook
+/tiktok — collega l'account TikTok (una volta sola)
 /social — stato dei collegamenti Instagram e TikTok
 /pubblicato 3 — segna il reel 3 come pubblicato (se l'hai fatto a mano)
 /rimanda 3 — sposta il reel 3 di 3 giorni
@@ -408,6 +411,15 @@ async function onCommand(cmd, arg, chatId) {
       if (!fb.configured()) return send('Facebook non è ancora collegato: /social per lo stato.');
       return doPublishFacebook(it, chatId);
     }
+    case 'tiktok': {
+      if (!tiktok.linkable()) return send('TikTok: mancano ancora <code>TIKTOK_CLIENT_KEY</code> e <code>TIKTOK_CLIENT_SECRET</code> su Railway.');
+      if (tiktok.configured() && !/rifai|nuovo|forza/i.test(String(arg || ''))) {
+        try { const m = await tiktok.me(); return send(`🎵 TikTok è già collegato come ${esc(m.display_name || m.open_id)}.\nPer rifare il collegamento: <code>/tiktok rifai</code>`); }
+        catch (e) {}
+      }
+      ttState = crypto.randomBytes(12).toString('hex');
+      return send(`🎵 <b>Collega TikTok</b>\nApri questo link e autorizza l'app. Il collegamento si chiude da solo.\n\n${esc(tiktok.authUrl(ttState))}`, { disable_web_page_preview: true });
+    }
     case 'rinnovatoken': {
       await refreshIgToken({ force: true });
       const quando = state.igTokenAt ? new Date(state.igTokenAt).toLocaleDateString('it-IT') : 'mai';
@@ -430,7 +442,8 @@ async function onCommand(cmd, arg, chatId) {
       if (tiktok.configured()) {
         try { const m = await tiktok.me(); righe.push(`🎵 TikTok: collegato come ${esc(m.display_name || m.open_id || '?')} — modalità ${tiktok.direct() ? 'pubblicazione diretta' : 'bozza'}`); }
         catch (e) { righe.push(`🎵 TikTok: token NON valido — ${esc((e.message || '').slice(0, 160))}`); }
-      } else righe.push('🎵 TikTok: non configurato (TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REFRESH_TOKEN)');
+      } else if (tiktok.linkable()) righe.push('🎵 TikTok: app pronta, account da collegare — manda /tiktok');
+      else righe.push('🎵 TikTok: non configurato (TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET)');
       if (fb.configured()) {
         try {
           const m = await fb.me();
@@ -499,16 +512,43 @@ function init({ app, dataDir, adminAuth, blog }) {
   const p = plan();
   if (!p.items || !p.items.length) { warn('social-plan.json assente o vuoto: modulo spento'); return; }
   reschedule();
+  if (state.ttRefresh) tiktok.setRefresh(state.ttRefresh);
 
   bot.registerModule({
     name: 'social',
-    commands: ['reel', 'reels', 'pubblicato', 'rimanda', 'reelpausa', 'reelriprendi', 'pubblicareel', 'pubblicafb', 'social', 'rinnovatoken', 'didascalia', 'tag'],
+    commands: ['reel', 'reels', 'pubblicato', 'rimanda', 'reelpausa', 'reelriprendi', 'pubblicareel', 'pubblicafb', 'social', 'rinnovatoken', 'didascalia', 'tag', 'tiktok'],
     prefixes: ['rl'],
     help: HELP,
     onCommand,
     onCallback,
     wantsText: () => !!awaiting,
     onText,
+  });
+
+  // ritorno dell'autorizzazione TikTok: nessuna password, il codice arriva da TikTok
+  app.get('/api/tiktok/callback', async (req, res) => {
+    const pagina = (titolo, testo) => res.status(200).type('html').send(
+      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<title>${titolo}</title><style>body{background:#020a0d;color:#e9f6f6;font:16px/1.6 system-ui,sans-serif;` +
+      `display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:2rem;text-align:center}` +
+      `b{color:#0af5f5}</style><div><h1>${titolo}</h1><p>${testo}</p></div>`);
+    try {
+      if (req.query.error) throw new Error(String(req.query.error_description || req.query.error));
+      const code = String(req.query.code || '');
+      if (!code) throw new Error('codice mancante');
+      if (!ttState || String(req.query.state || '') !== ttState) throw new Error('richiesta non riconosciuta: rilancia /tiktok sul bot');
+      ttState = null;
+      const t = await tiktok.exchangeCode(code);
+      state.ttRefresh = t.refresh_token; state.ttOpenId = t.open_id || null; state.ttAt = Date.now();
+      saveState();
+      tiktok.setRefresh(t.refresh_token);
+      log('TikTok collegato');
+      try { await bot.notifyOwner('🎵 <b>TikTok collegato.</b> Da ora il pacchetto dei reel ha il pulsante per mandare il video nelle bozze di TikTok.'); } catch (e) {}
+      return pagina('TikTok collegato', 'Puoi chiudere questa pagina e tornare su Telegram.');
+    } catch (e) {
+      warn('callback TikTok:', e.message);
+      return pagina('Collegamento non riuscito', `<b>${esc((e.message || '').slice(0, 200))}</b><br>Rilancia /tiktok sul bot.`);
+    }
   });
 
   app.get('/api/admin/reels', adminAuth, (req, res) => res.json({ status: statusText(), state }));
