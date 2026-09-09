@@ -18,10 +18,16 @@
      FB_PAGE_ID       id numerico della Pagina
      FB_PAGE_TOKEN    token della Pagina. Se manca si usa FB_USER_TOKEN.
      FB_USER_TOKEN    token dell'utente con pages_show_list + pages_manage_posts:
-                      il server ricava da solo il token della Pagina con GET /me/accounts
-                      e lo tiene in cache un'ora. Comodo perché è quello che si copia
-                      con un clic dall'Esploratore per la API Graph, e un token utente
-                      di lunga durata (60 giorni) genera token di Pagina sempre validi.
+                      il server ricava da solo il token della Pagina con
+                      GET /{FB_PAGE_ID}?fields=access_token e lo tiene in cache un'ora.
+                      Comodo perché è quello che si copia con un clic dall'Esploratore
+                      per la API Graph, e un token utente di lunga durata (60 giorni)
+                      genera token di Pagina sempre validi.
+                      NOTA: con «Facebook Login for Business» e gli ambiti granulari
+                      /me/accounts risponde {"data":[]} anche quando la Pagina è
+                      autorizzata (verificato il 2026-09-09), perché il permesso è
+                      concesso sulla singola Pagina e non sull'elenco: per questo si
+                      legge la Pagina per id, e /me/accounts resta solo come ripiego.
      FB_API_VERSION   default v23.0
      FB_ENABLED=0     spegne la pubblicazione
    ──────────────────────────────────────────────── */
@@ -45,16 +51,35 @@ async function TOKEN({ fresh = false } = {}) {
   const user = env('FB_USER_TOKEN');
   if (!user) throw new Error('Facebook non configurato: manca FB_PAGE_TOKEN o FB_USER_TOKEN');
   if (!fresh && derived.token && Date.now() - derived.at < 3600 * 1000) return derived.token;
-  const url = new URL(`https://graph.facebook.com/${VER()}/me/accounts`);
-  url.search = new URLSearchParams({ fields: 'id,name,access_token', limit: '100', access_token: user }).toString();
-  const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
-  const j = await r.json().catch(() => ({}));
-  if (j.error) throw new Error(`token utente non valido: ${j.error.message || j.error.code}`);
-  const page = (j.data || []).find(p => String(p.id) === PAGE());
-  if (!page) throw new Error(`la Pagina ${PAGE()} non è tra quelle autorizzate (${(j.data || []).map(p => p.id).join(', ') || 'nessuna'})`);
-  derived = { token: page.access_token, at: Date.now() };
-  log(`token della Pagina «${page.name}» ricavato dal token utente`);
-  return derived.token;
+
+  const ask = async (pathname, params) => {
+    const url = new URL(`https://graph.facebook.com/${VER()}/${pathname}`);
+    url.search = new URLSearchParams({ ...params, access_token: user }).toString();
+    const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    return r.json().catch(() => ({}));
+  };
+
+  // 1) la Pagina letta per id: funziona anche con gli ambiti granulari
+  const direct = await ask(PAGE(), { fields: 'id,name,access_token' });
+  if (direct && direct.access_token) {
+    derived = { token: direct.access_token, at: Date.now() };
+    log(`token della Pagina «${direct.name || PAGE()}» ricavato dal token utente`);
+    return derived.token;
+  }
+  const firstError = direct && direct.error;
+
+  // 2) ripiego: l'elenco delle Pagine gestite (app con login classico)
+  const list = await ask('me/accounts', { fields: 'id,name,access_token', limit: '100' });
+  const page = (list.data || []).find(p => String(p.id) === PAGE());
+  if (page && page.access_token) {
+    derived = { token: page.access_token, at: Date.now() };
+    log(`token della Pagina «${page.name}» ricavato da /me/accounts`);
+    return derived.token;
+  }
+
+  if (firstError) throw new Error(`token utente non valido o senza accesso alla Pagina ${PAGE()}: ${firstError.message || firstError.code}`);
+  if (list.error) throw new Error(`token utente non valido: ${list.error.message || list.error.code}`);
+  throw new Error(`la Pagina ${PAGE()} non ha restituito un token: controlla che il token utente abbia pages_manage_posts su quella Pagina (/me/accounts ha elencato: ${(list.data || []).map(p => p.id).join(', ') || 'nessuna'})`);
 }
 
 async function api(pathname, { method = 'GET', params = {}, timeoutMs = 60000 } = {}) {
