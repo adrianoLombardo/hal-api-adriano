@@ -770,7 +770,7 @@ Collezione: Holy Club | Tema: Simulazione, Percezione
 Concetto: Opera di arte digitale interattiva che interroga il confine tra simulazione e realtà, tra macchina autentica e imitazione perfetta. Un sistema visivo che espone i meccanismi nascosti della percezione tecnologica. Dove finisce la macchina e inizia l'emozione?
 
 ## PROGETTO FLAGSHIP: NEURO.FLOW
-Sistema di sincronizzazione neurale in tempo reale. Due partecipanti indossano headset EEG Muse 2. L'attività cerebrale genera un universo audiovisivo. Misura la sincronizzazione inter-cerebrale (PLV) su bande alpha, beta, theta, delta e gamma. Orchestra luci GrandMA3, proiezioni NotchVFX e suoni spaziali. Latenza inferiore ai 50ms.
+Sistema di sincronizzazione neurale in tempo reale. Due partecipanti indossano headset EEG Muse 2. L'attività cerebrale genera un universo audiovisivo. Misura la sincronizzazione inter-cerebrale (PLV) su bande alpha, beta, theta, delta e gamma. Orchestra luci Avolites, proiezioni NotchVFX e suoni spaziali. Latenza inferiore ai 50ms.
 - Hardware: 2x Muse 2 EEG
 - Visual: Notch + TouchDesigner
 - Software: BrainFlow, muse-lsl, OSC, ArtNet Bridge
@@ -783,7 +783,7 @@ Sistema di sincronizzazione neurale in tempo reale. Due partecipanti indossano h
 - Gamma (30-100 Hz): Binding cognitivo. Attiva picchi di luce estrema e sincronizzazioni inter-cerebrali.
 
 ## SKILLS TECNICHE
-- Lighting: GrandMA3 Programming, Avolites Titan v15/v18, ArtNet DMX (3 universi), LED Pixel Mapping
+- Lighting: Avolites Programming, Avolites Titan v15/v18, ArtNet DMX (3 universi), LED Pixel Mapping
 - Visual: TouchDesigner GLSL, NotchVFX Real-Time, StreamDiffusion AI, Projection Mapping
 - Neuroscience: Muse 2 EEG Dual, BrainFlow, muse-lsl, PLV Inter-brain Sync, OSC/ArtNet Bridge
 - Code: Python, VS Code, WSL2, PowerShell, MIDI, LTC Timecode, Multi-Agent AI

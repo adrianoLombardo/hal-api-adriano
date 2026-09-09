@@ -148,7 +148,7 @@
       "keywords": "regia evento immersivo, tecnico installazione evento, live show control",
       "fallback": "/img/hc/copertina.jpg",
       "fallbackOg": "/img/hc/copertina.jpg",
-      "fallbackAlt": "Banco regia con GrandMA3 e schermi durante un evento",
+      "fallbackAlt": "Banco regia con Avolites e schermi durante un evento",
       "format": "guida"
     },
     { "id": "luce-uv-fili",
@@ -208,11 +208,11 @@
       "format": "guida"
     },
     { "id": "grandma3-luce-dati",
-      "title": "Quando i dati pilotano la luce: collegare sensori e GrandMA3 in tempo reale",
+      "title": "Quando i dati pilotano la luce: collegare sensori e Avolites in tempo reale",
       "angle": "tecnico ma leggibile: OSC, ArtNet, mapping dei valori, latenza, esempi da Neuro.Flow",
       "tags": [
         "Light Design",
-        "GrandMA3",
+        "Avolites",
         "Tecnica"
       ],
       "keywords": "grandma3 osc artnet, luce controllata dai dati, light design interattivo",
