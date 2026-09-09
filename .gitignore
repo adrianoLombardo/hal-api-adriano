@@ -5,3 +5,6 @@ hal-logs.json
 # blog automatico (stato e file di lavoro, solo locali)
 blog-state.json
 blog-work/
+
+# stato del bot social (token Instagram e refresh TikTok): mai nel repo
+social-state.json
