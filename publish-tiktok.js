@@ -22,7 +22,11 @@ const env = (k, d = '') => (process.env[k] || d).trim();
 const log = (...a) => console.log('[TIKTOK]', ...a);
 const warn = (...a) => console.warn('[TIKTOK]', ...a);
 let saved = null;                       // refresh token ottenuto con l'OAuth e salvato nello stato
+let onRotate = null;                    // chi persiste il refresh token quando TikTok lo cambia
 const setRefresh = (t) => { saved = t || null; cached = { token: null, at: 0, refresh: null }; };
+/** TikTok RUOTA il refresh token a ogni rinnovo: chi ci usa deve salvarlo, altrimenti
+    al riavvio si riparte da uno ormai invalido e serve rifare l'autorizzazione. */
+const setOnRotate = (fn) => { onRotate = typeof fn === 'function' ? fn : null; };
 const REFRESH = () => saved || env('TIKTOK_REFRESH_TOKEN');
 /** l'app c'è: si può avviare l'autorizzazione */
 const linkable = () => !!(env('TIKTOK_CLIENT_KEY') && env('TIKTOK_CLIENT_SECRET')) && env('TIKTOK_ENABLED') !== '0';
@@ -65,18 +69,27 @@ let cached = { token: null, at: 0, refresh: null };
 
 async function accessToken() {
   if (cached.token && Date.now() - cached.at < 60 * 60 * 1000) return cached.token;
+  const usato = cached.refresh || REFRESH();
+  if (!usato) throw new Error('TikTok: nessun refresh token. Manda /tiktok al bot.');
   const r = await fetch('https://open.tiktokapis.com/v2/oauth/token/', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       client_key: env('TIKTOK_CLIENT_KEY'), client_secret: env('TIKTOK_CLIENT_SECRET'),
-      grant_type: 'refresh_token', refresh_token: cached.refresh || REFRESH(),
+      grant_type: 'refresh_token', refresh_token: usato,
     }),
     signal: AbortSignal.timeout(30000),
   });
   const j = await r.json();
   if (!r.ok || j.error) throw new Error(`token: ${j.error_description || j.error || r.status}`);
-  cached = { token: j.access_token, at: Date.now(), refresh: j.refresh_token || cached.refresh };
+  const nuovo = j.refresh_token || cached.refresh;
+  const ruotato = !!(j.refresh_token && j.refresh_token !== usato);
+  cached = { token: j.access_token, at: Date.now(), refresh: nuovo };
+  if (ruotato) {
+    saved = j.refresh_token;
+    log('refresh token ruotato da TikTok, lo salvo');
+    if (onRotate) { try { onRotate(j.refresh_token); } catch (e) { warn('salvataggio refresh token:', e.message); } }
+  }
   return cached.token;
 }
 
@@ -151,4 +164,4 @@ async function status(publish_id) {
   return (j.data && j.data.status) || 'UNKNOWN';
 }
 
-module.exports = { configured, linkable, direct, me, creatorInfo, sendVideo, status, authUrl, exchangeCode, setRefresh, redirectUri };
+module.exports = { configured, linkable, direct, me, creatorInfo, sendVideo, status, authUrl, exchangeCode, setRefresh, setOnRotate, redirectUri };

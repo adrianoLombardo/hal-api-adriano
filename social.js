@@ -115,7 +115,10 @@ function afterPublish(it) {
     : `${fuori} Non resta altro in calendario 🎉`;
 }
 function setEdit(id, patch) { state.edits[id] = { ...(state.edits[id] || {}), ...patch }; saveState(); }
-const isDone = (id) => !!(state.done[id] && state.done[id].instagram);
+/** un reel esce dal calendario appena e' stato pubblicato su almeno un canale */
+const isDone = (id) => { const d = state.done[id]; return !!(d && (d.instagram || d.facebook || d.tiktok)); };
+/** su quali canali e' uscito, per i messaggi di stato */
+const canali = (id) => { const d = state.done[id] || {}; return [d.instagram && '📸', d.facebook && '📘', d.tiktok && '🎵'].filter(Boolean).join(''); };
 
 /* ── date in Europa/Roma ── */
 function romeParts(ms) {
@@ -175,7 +178,17 @@ function keyboard(it) {
   return { inline_keyboard: rows };
 }
 
-/* ── pubblicazione vera ── */
+/* ── pubblicazione vera ──
+   Telegram non spegne il pulsante dopo il tocco e una pubblicazione dura minuti:
+   senza questo blocco un secondo tocco fa uscire lo stesso reel due volte.   */
+const inCorso = new Set();
+async function conBlocco(chiave, chatId, quando, fn) {
+  if (inCorso.has(chiave)) return bot.send(chatId, `⏳ ${quando} è già in corso, aspetta che finisca.`);
+  inCorso.add(chiave);
+  try { return await fn(); }
+  finally { inCorso.delete(chiave); }
+}
+
 async function doPublishInstagram(it, chatId) {
   const send = (t) => bot.send(chatId, t);
   await send(`🚀 Pubblico il reel ${it.reel} su Instagram. Il caricamento richiede uno o due minuti…`);
@@ -204,7 +217,7 @@ async function doPublishTikTok(it, chatId) {
   const send = (t) => bot.send(chatId, t);
   await send(`${tiktok.direct() ? '🚀 Pubblico' : '📥 Mando'} il reel ${it.reel} su TikTok…`);
   const r = await tiktok.sendVideo({ videoUrl: it.video, title: it.tiktok, onProgress: (st) => log(`reel ${it.id} tiktok: ${st}`) });
-  markDone(it.id, { tiktok: Date.now(), tiktokId: r.publish_id, instagram: (state.done[it.id] || {}).instagram || Date.now() });
+  markDone(it.id, { tiktok: Date.now(), tiktokId: r.publish_id });
   await send(r.mode === 'bozza'
     ? `📥 <b>Video su TikTok</b>, nelle bozze.\nApri l'app TikTok → notifiche o bozze → aggiungi la didascalia (te l'ho mandata sopra) e pubblica.`
     : `✅ <b>Pubblicato su TikTok</b> (id ${esc(r.publish_id)}).`);
@@ -277,24 +290,33 @@ async function tick() {
 }
 
 /* ── revisione del testo: il prossimo messaggio libero arriva qui ── */
-let awaiting = null;   // { id, field: 'caption' | 'tags', chatId }
+let awaiting = null;   // { id, field: 'caption' | 'tags', chatId, at }
+/** l'attesa scade: se no un pulsante premuto e dimenticato dirotta per sempre
+    i messaggi liberi, comprese le correzioni degli articoli del blog */
+const ATTESA_MS = 15 * 60 * 1000;
+const inAttesa = () => !!(awaiting && Date.now() - awaiting.at < ATTESA_MS);
 let ttState = null;    // csrf dell'autorizzazione TikTok in corso
 
+/** La chiocciola e' obbligatoria: senza, una frase italiana diventerebbe una lista
+    di nomi utente inventati (e finirebbe davvero in user_tags su Instagram). */
 function parseHandles(text) {
   const [left, right] = String(text).split('|');
-  const grab = (s) => (s || '').split(/[\s,;]+/).map(x => x.trim().replace(/^@+/, '')).filter(x => /^[a-z0-9._]{1,30}$/i.test(x));
+  const grab = (s) => [...new Set((String(s || '').match(/@[a-z0-9._]{1,30}/gi) || []).map(x => x.slice(1)))];
   return { tags: grab(left), collaborators: grab(right).slice(0, 3) };
 }
 
 async function onText(text, chatId) {
-  if (!awaiting) return;
+  if (!inAttesa()) { awaiting = null; return; }
   const it = findItem(awaiting.id);
   const field = awaiting.field;
   if (/^annulla$/i.test(text.trim())) { awaiting = null; return bot.send(chatId, 'Lasciato com\'era.'); }
   if (!it) { awaiting = null; return bot.send(chatId, 'Reel non trovato.'); }
   if (field === 'caption') {
-    const hashtags = (text.match(/#[\p{L}\p{N}_]+/gu) || []);
-    const body = text.replace(/\n?(#[\p{L}\p{N}_]+\s*)+$/u, '').trim();
+    // solo il blocco di hashtag in fondo conta: uno scritto dentro la frase resta nel testo
+    const coda = /(?:^|\n)[ \t]*((?:#[\p{L}\p{N}_]+[ \t]*){1,})$/u.exec(text);
+    const hashtags = coda ? (coda[1].match(/#[\p{L}\p{N}_]+/gu) || []) : [];
+    const body = (coda ? text.slice(0, coda.index) : text).trim();
+    if (!body) return bot.send(chatId, 'La didascalia sarebbe vuota: mandami il testo, gli hashtag vanno in fondo.');
     setEdit(it.id, { instagram: body, ...(hashtags.length ? { hashtags } : {}) });
     awaiting = null;
     const nuovo = findItem(it.id);
@@ -304,7 +326,10 @@ async function onText(text, chatId) {
     if (/^nessuno$/i.test(text.trim())) { setEdit(it.id, { userTags: [], collaborators: [] }); }
     else {
       const { tags, collaborators } = parseHandles(text);
-      if (!tags.length && !collaborators.length) return bot.send(chatId, 'Non ho riconosciuto nomi utente validi. Riprova, per esempio: <code>@holyclub @sublimetecnologico | @holyclub</code>');
+      if (!tags.length && !collaborators.length) {
+        awaiting = null;   // non tengo in ostaggio i messaggi successivi (es. le correzioni del blog)
+        return bot.send(chatId, 'Non ho trovato nomi utente: devono iniziare con la chiocciola, per esempio <code>@holyclub @sublimetecnologico | @holyclub</code>.\nNon ho cambiato niente; rilancia /tag quando vuoi.');
+      }
       setEdit(it.id, { userTags: tags, collaborators });
     }
     awaiting = null;
@@ -324,7 +349,7 @@ function statusText() {
     .map(withEdits);
   const rows = attivi.map(it => `${state.sent[it.id] ? '📤' : '•'} ${it.date ? dateIt(it.date) : '—'} · reel ${it.reel} ${it.title}`);
   const fattiRiga = fatti.length
-    ? `Pubblicati dal bot: ${fatti.map(it => { const d = state.done[it.id] || {}; return `reel ${it.reel} ${d.tiktok ? '✅' : '📸'} ${dateIt(todayIso(d.instagram || d.facebook || Date.now()))}`; }).join(' · ')}`
+    ? `Pubblicati dal bot: ${fatti.map(it => { const d = state.done[it.id] || {}; return `reel ${it.reel} ${canali(it.id)} ${dateIt(todayIso(d.instagram || d.facebook || d.tiktok || Date.now()))}`; }).join(' · ')}`
     : '';
   const doneN = fatti.length;
   const out = plan().items.filter(i => i.skipped);
@@ -338,7 +363,7 @@ function statusText() {
     held.length ? `In attesa (non opere): ${held.join(' · ')} — /reel <numero> per mandarne uno` : '',
     '',
     `Pubblicazione: Instagram ${ig.configured() ? 'automatica' : 'a mano'} · Facebook ${fb.configured() ? 'automatica' : 'a mano'} · TikTok ${tiktok.configured() ? (tiktok.direct() ? 'automatica' : 'in bozza') : 'a mano'}`,
-    'Legenda: • in attesa · 📤 inviato · 📸 su Instagram · ✅ anche su TikTok',
+    'Legenda: • in attesa · 📤 inviato · 📸 Instagram · 📘 Facebook · 🎵 TikTok',
     'Un reel pubblicato esce dal calendario e gli altri scalano negli slot liberi.',
   ].filter(Boolean).join('\n');
 }
@@ -403,13 +428,13 @@ async function onCommand(cmd, arg, chatId) {
       const it = findReel(arg) || items().find(x => !isDone(x.id));
       if (!it) return send('Quale reel? Esempio: /pubblicareel 3');
       if (!ig.configured()) return send('Instagram non è ancora collegato: /social per lo stato.');
-      return doPublishInstagram(it, chatId);
+      return conBlocco(`ig:${it.id}`, chatId, 'La pubblicazione su Instagram', () => doPublishInstagram(it, chatId));
     }
     case 'pubblicafb': {
       const it = findReel(arg) || items().find(x => !isDone(x.id));
       if (!it) return send('Quale reel? Esempio: /pubblicafb 3');
       if (!fb.configured()) return send('Facebook non è ancora collegato: /social per lo stato.');
-      return doPublishFacebook(it, chatId);
+      return conBlocco(`fb:${it.id}`, chatId, 'La pubblicazione su Facebook', () => doPublishFacebook(it, chatId));
     }
     case 'tiktok': {
       if (!tiktok.linkable()) return send('TikTok: mancano ancora <code>TIKTOK_CLIENT_KEY</code> e <code>TIKTOK_CLIENT_SECRET</code> su Railway.');
@@ -428,7 +453,7 @@ async function onCommand(cmd, arg, chatId) {
     case 'didascalia': case 'tag': {
       const it = findReel(arg);
       if (!it) return send(`Quale reel? Esempio: /${cmd} 3`);
-      awaiting = { id: it.id, field: cmd === 'didascalia' ? 'caption' : 'tags', chatId };
+      awaiting = { id: it.id, field: cmd === 'didascalia' ? 'caption' : 'tags', chatId, at: Date.now() };
       return send(cmd === 'didascalia'
         ? `✏️ Mandami la nuova didascalia del reel ${it.reel}. Ecco quella attuale:\n${pre(igFull(findItem(it.id)))}`
         : `🏷 Mandami i nomi utente da taggare nel reel ${it.reel} (collaboratori dopo una barra verticale).\nOra: ${esc(tagLine(findItem(it.id)) || 'nessuno')}`);
@@ -469,7 +494,7 @@ async function onCallback(action, id, cb) {
     return bot.send(chatId, `✅ Reel ${it.reel} pubblicato su Instagram.\n${afterPublish(it)}`);
   }
   if (action === 'tt') {
-    markDone(it.id, { tiktok: Date.now(), instagram: d.instagram || Date.now() });
+    markDone(it.id, { tiktok: Date.now() });
     return bot.send(chatId, `🎵 Reel ${it.reel} segnato anche su TikTok. ${items().filter(x => !isDone(x.id)).length} reel ancora in calendario.`);
   }
   if (action === 'go') {
@@ -477,21 +502,22 @@ async function onCallback(action, id, cb) {
     return sendPackage(it, chatId, { manual: true });
   }
   if (action === 'pig') {
-    if (isDone(it.id) && d.instagramId) return bot.send(chatId, `Il reel ${it.reel} è già stato pubblicato${d.permalink ? ': ' + d.permalink : ''}.`);
-    try { return await doPublishInstagram(it, chatId); }
+    if (d.instagramId) return bot.send(chatId, `Il reel ${it.reel} è già stato pubblicato${d.permalink ? ': ' + d.permalink : ''}.`);
+    try { return await conBlocco(`ig:${it.id}`, chatId, 'La pubblicazione su Instagram', () => doPublishInstagram(it, chatId)); }
     catch (e) { warn('pubblicazione IG:', e.message); return bot.send(chatId, `❌ Instagram non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>\n\nPuoi pubblicarlo a mano dal telefono e premere «L'ho pubblicato a mano».`); }
   }
   if (action === 'ptt') {
-    try { return await doPublishTikTok(it, chatId); }
+    if (d.tiktokId) return bot.send(chatId, `Il reel ${it.reel} è già andato su TikTok.`);
+    try { return await conBlocco(`tt:${it.id}`, chatId, "L'invio a TikTok", () => doPublishTikTok(it, chatId)); }
     catch (e) { warn('pubblicazione TikTok:', e.message); return bot.send(chatId, `❌ TikTok non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>`); }
   }
   if (action === 'pfb') {
     if (d.facebookId) return bot.send(chatId, `Il reel ${it.reel} è già su Facebook${d.facebookLink ? ': ' + d.facebookLink : ''}.`);
-    try { return await doPublishFacebook(it, chatId); }
+    try { return await conBlocco(`fb:${it.id}`, chatId, 'La pubblicazione su Facebook', () => doPublishFacebook(it, chatId)); }
     catch (e) { warn('pubblicazione Facebook:', e.message); return bot.send(chatId, `❌ Facebook non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>`); }
   }
   if (action === 'edcap' || action === 'edtag') {
-    awaiting = { id: it.id, field: action === 'edcap' ? 'caption' : 'tags', chatId };
+    awaiting = { id: it.id, field: action === 'edcap' ? 'caption' : 'tags', chatId, at: Date.now() };
     return bot.send(chatId, action === 'edcap'
       ? `✏️ Mandami la <b>nuova didascalia</b> del reel ${it.reel} in un messaggio.\nGli hashtag li rimetto io in fondo (${it.hashtags.length}); se ne scrivi di tuoi uso i tuoi.\nScrivi <code>annulla</code> per lasciare tutto com'è.`
       : `🏷 Mandami i nomi utente da taggare nel reel ${it.reel}, separati da spazio.\nPer i collaboratori (massimo 3, devono accettare l'invito su Instagram) scrivili dopo una barra verticale:\n<code>@holyclub @sublimetecnologico | @holyclub</code>\nScrivi <code>nessuno</code> per toglierli, <code>annulla</code> per lasciare tutto com'è.`);
@@ -512,6 +538,7 @@ function init({ app, dataDir, adminAuth, blog }) {
   const p = plan();
   if (!p.items || !p.items.length) { warn('social-plan.json assente o vuoto: modulo spento'); return; }
   reschedule();
+  tiktok.setOnRotate((t) => { state.ttRefresh = t; state.ttAt = Date.now(); saveState(); });
   if (state.ttRefresh) tiktok.setRefresh(state.ttRefresh);
 
   bot.registerModule({
@@ -521,7 +548,7 @@ function init({ app, dataDir, adminAuth, blog }) {
     help: HELP,
     onCommand,
     onCallback,
-    wantsText: () => !!awaiting,
+    wantsText: () => inAttesa(),
     onText,
   });
 
@@ -553,7 +580,7 @@ function init({ app, dataDir, adminAuth, blog }) {
 
   app.get('/api/admin/reels', adminAuth, (req, res) => res.json({ status: statusText(), state }));
   app.post('/api/admin/reels/send/:id', adminAuth, async (req, res) => {
-    const it = plan().items.find(x => x.id === String(req.params.id).padStart(2, '0'));
+    const it = findItem(String(req.params.id).padStart(2, '0'));
     if (!it) return res.status(404).json({ error: 'reel non trovato' });
     try { await sendPackage(it, null, { manual: true }); res.json({ ok: true, reel: it.reel }); }
     catch (e) { res.status(500).json({ error: e.message }); }
