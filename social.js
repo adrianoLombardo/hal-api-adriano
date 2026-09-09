@@ -29,7 +29,7 @@ let state = null;
 let busy = false;
 
 /* ── stato ── */
-function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {}, igToken: null, igTokenAt: null, edits: {} }; }
+function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {}, igToken: null, igTokenAt: null, edits: {}, schedule: {} }; }
 function loadState() {
   try { state = Object.assign(defaultState(), JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))); }
   catch (e) { state = defaultState(); }
@@ -38,14 +38,81 @@ function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state, 
 function plan() {
   try { return JSON.parse(fs.readFileSync(PLAN_FILE, 'utf8')); } catch (e) { return { items: [] }; }
 }
-/** reel in calendario, con la data eventualmente rimandata da Adriano */
-const withEdits = (it) => ({ ...it, ...(state.edits[it.id] || {}), date: state.postponed[it.id] || it.date });
+/** reel in calendario, con lo slot assegnato e le modifiche fatte da Telegram */
+const withEdits = (it) => {
+  const base = { ...it, ...(state.edits[it.id] || {}) };
+  if (state.postponed[it.id]) return { ...base, date: state.postponed[it.id] };
+  const s = (state.schedule || {})[it.id];
+  return s ? { ...base, date: s.date, time: s.time, tiktokTime: s.tiktokTime } : base;
+};
 function items() {
   return plan().items.map(withEdits)
     .filter(it => !it.skipped)
     .sort((a, b) => (a.date || '9').localeCompare(b.date || '9'));
 }
 function findItem(id) { const it = plan().items.find(x => x.id === id); return it ? withEdits(it) : null; }
+
+/* ── slot del calendario ────────────────────────────────────────────────
+   Gli slot sono le date previste dal piano. Non appartengono a un reel:
+   sono posti in fila. Quando un reel viene pubblicato esce dalla coda e
+   i successivi scalano in avanti, così pubblicare in anticipo non lascia
+   buchi e non allunga la serie. `reschedule()` va richiamata a ogni
+   cambio di stato (pubblicato, rimandato, ripristinato).            */
+function slotList() {
+  const s = plan().items.filter(i => !i.skipped && i.date)
+    .map(i => ({ date: i.date, time: i.time, tiktokTime: i.tiktokTime }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  return s;
+}
+/** passo medio fra uno slot e il successivo, per prolungare il calendario se serve */
+function slotStep(list) {
+  if (list.length < 2) return 4;
+  const g = [];
+  for (let i = 1; i < list.length; i++) g.push(Math.round((Date.parse(list[i].date) - Date.parse(list[i - 1].date)) / 86400000));
+  const ok = g.filter(n => n > 0);
+  return ok.length ? Math.max(1, Math.round(ok.reduce((a, b) => a + b, 0) / ok.length)) : 4;
+}
+function reschedule() {
+  const oggi = todayIso();
+  const coda = plan().items
+    .filter(i => !i.skipped && !isDone(i.id))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  // le date fissate a mano con /rimanda non vengono riassegnate a nessun altro
+  const fissate = new Set(coda.map(i => state.postponed[i.id]).filter(Boolean));
+  const tutti = slotList();
+  const liberi = tutti.filter(s => s.date >= oggi && !fissate.has(s.date));
+  const step = slotStep(tutti);
+  const nuovo = {};
+  let k = 0;
+  for (const it of coda) {
+    if (state.postponed[it.id]) continue;
+    if (!liberi[k]) {
+      // finiti gli slot del piano: prolungo con lo stesso passo
+      const ultimo = liberi[k - 1] || tutti[tutti.length - 1] || { date: oggi, time: '18:30', tiktokTime: '20:00' };
+      liberi[k] = { date: addDays(ultimo.date, step), time: ultimo.time, tiktokTime: ultimo.tiktokTime };
+    }
+    nuovo[it.id] = liberi[k++];
+  }
+  state.schedule = nuovo;
+  saveState();
+  return nuovo;
+}
+/** segna un reel come pubblicato e lo toglie dal calendario, facendo scalare gli altri */
+function markDone(id, patch) {
+  state.done[id] = { ...(state.done[id] || {}), ...patch };
+  delete state.postponed[id];
+  delete state.sent[id];
+  saveState();
+  reschedule();
+}
+/** riga da mostrare dopo una pubblicazione: chi è uscito e cosa viene dopo */
+function afterPublish(it) {
+  const next = items().find(x => !isDone(x.id));
+  const fuori = `🗓 Reel ${it.reel} tolto dal calendario.`;
+  return next
+    ? `${fuori} Gli altri scalano: prossimo il reel ${next.reel} · ${esc(next.title)} — ${esc(dateIt(next.date))}.`
+    : `${fuori} Non resta altro in calendario 🎉`;
+}
 function setEdit(id, patch) { state.edits[id] = { ...(state.edits[id] || {}), ...patch }; saveState(); }
 const isDone = (id) => !!(state.done[id] && state.done[id].instagram);
 
@@ -74,7 +141,7 @@ function addDays(iso, n) {
   const t = new Date(Date.UTC(y, m - 1, d + n));
   return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
 }
-function todayIso() { const r = romeParts(Date.now()); return `${r.y}-${String(r.m).padStart(2, '0')}-${String(r.d).padStart(2, '0')}`; }
+function todayIso(ms = Date.now()) { const r = romeParts(ms); return `${r.y}-${String(r.m).padStart(2, '0')}-${String(r.d).padStart(2, '0')}`; }
 
 /* ── testo ── */
 const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -116,10 +183,8 @@ async function doPublishInstagram(it, chatId) {
     userTags: it.userTags || [], collaborators: it.collaborators || [],
     onProgress: (st) => log(`reel ${it.id}: ${st}`),
   });
-  const d = state.done[it.id] || {}; d.instagram = Date.now(); d.instagramId = r.id; d.permalink = r.permalink || null;
-  state.done[it.id] = d; saveState();
-  const next = items().find(x => !isDone(x.id));
-  await send(`✅ <b>Pubblicato su Instagram</b>${r.permalink ? `\n${r.permalink}` : ''}\n\nRicordati della copertina: in Instagram puoi cambiarla dal fotogramma a ${esc(coverTime(it) || '—')}.${next ? `\nProssimo: reel ${next.reel} · ${esc(next.title)} — ${esc(dateIt(next.date))}.` : ''}`);
+  markDone(it.id, { instagram: Date.now(), instagramId: r.id, permalink: r.permalink || null });
+  await send(`✅ <b>Pubblicato su Instagram</b>${r.permalink ? `\n${r.permalink}` : ''}\n\nRicordati della copertina: in Instagram puoi cambiarla dal fotogramma a ${esc(coverTime(it) || '—')}.\n${afterPublish(it)}`);
   if (fb.configured()) await send('📘 Vuoi anche su Facebook? Premi «Pubblica su Facebook» qui sopra.');
   if (tiktok.configured()) await send('Alle 20:00 ti ricordo TikTok, oppure premi ora il pulsante di TikTok qui sopra.');
 }
@@ -128,8 +193,7 @@ async function doPublishFacebook(it, chatId) {
   const send = (t) => bot.send(chatId, t);
   await send(`📘 Pubblico il reel ${it.reel} sulla Pagina Facebook…`);
   const r = await fb.publishReel({ videoUrl: it.video, description: igFull(it), onProgress: (st) => log(`reel ${it.id} facebook: ${st}`) });
-  const d = state.done[it.id] || {}; d.facebook = Date.now(); d.facebookId = r.id; d.facebookLink = r.permalink || null;
-  state.done[it.id] = d; saveState();
+  markDone(it.id, { facebook: Date.now(), facebookId: r.id, facebookLink: r.permalink || null });
   await send(r.pending
     ? `📘 Reel ${it.reel} caricato su Facebook: sta ancora elaborando, comparirà tra qualche minuto.\n${esc(r.permalink)}`
     : `✅ <b>Pubblicato su Facebook</b>\n${esc(r.permalink)}`);
@@ -139,8 +203,7 @@ async function doPublishTikTok(it, chatId) {
   const send = (t) => bot.send(chatId, t);
   await send(`${tiktok.direct() ? '🚀 Pubblico' : '📥 Mando'} il reel ${it.reel} su TikTok…`);
   const r = await tiktok.sendVideo({ videoUrl: it.video, title: it.tiktok, onProgress: (st) => log(`reel ${it.id} tiktok: ${st}`) });
-  const d = state.done[it.id] || {}; d.tiktok = Date.now(); d.tiktokId = r.publish_id; if (!d.instagram) d.instagram = Date.now();
-  state.done[it.id] = d; saveState();
+  markDone(it.id, { tiktok: Date.now(), tiktokId: r.publish_id, instagram: (state.done[it.id] || {}).instagram || Date.now() });
   await send(r.mode === 'bozza'
     ? `📥 <b>Video su TikTok</b>, nelle bozze.\nApri l'app TikTok → notifiche o bozze → aggiungi la didascalia (te l'ho mandata sopra) e pubblica.`
     : `✅ <b>Pubblicato su TikTok</b> (id ${esc(r.publish_id)}).`);
@@ -251,29 +314,36 @@ async function onText(text, chatId) {
 /* ── comandi ── */
 function statusText() {
   const list = items();
-  const rows = list.map(it => {
-    const d = state.done[it.id] || {};
-    const mark = d.instagram ? (d.tiktok ? '✅' : '📸') : (state.sent[it.id] ? '📤' : '•');
-    return `${mark} ${it.date ? dateIt(it.date) : '—'} · reel ${it.reel} ${it.title}`;
-  });
-  const doneN = list.filter(it => isDone(it.id)).length;
+  // i pubblicati escono dal calendario: restano solo quelli ancora da fare
+  const attivi = list.filter(it => !isDone(it.id));
+  // anche i reel fuori calendario, se pubblicati dal bot, vanno nella riga dei fatti
+  const fatti = plan().items
+    .filter(i => isDone(i.id) && !(i.skipped && i.status !== 'hold'))
+    .map(withEdits);
+  const rows = attivi.map(it => `${state.sent[it.id] ? '📤' : '•'} ${it.date ? dateIt(it.date) : '—'} · reel ${it.reel} ${it.title}`);
+  const fattiRiga = fatti.length
+    ? `Pubblicati dal bot: ${fatti.map(it => { const d = state.done[it.id] || {}; return `reel ${it.reel} ${d.tiktok ? '✅' : '📸'} ${dateIt(todayIso(d.instagram || d.facebook || Date.now()))}`; }).join(' · ')}`
+    : '';
+  const doneN = fatti.length;
   const out = plan().items.filter(i => i.skipped);
   const pub = out.filter(i => i.status !== 'hold').map(i => `reel ${i.reel}`);
-  const held = out.filter(i => i.status === 'hold').map(i => `reel ${i.reel} ${i.title}`);
+  const held = out.filter(i => i.status === 'hold' && !isDone(i.id)).map(i => `reel ${i.reel} ${i.title}`);
   return [
-    `Calendario reel — ${doneN} su ${list.length} pubblicati${state.paused ? ' (IN PAUSA)' : ''}`,
-    ...rows,
+    `Calendario reel — ${doneN} su ${attivi.length + fatti.length} pubblicati${state.paused ? ' (IN PAUSA)' : ''}`,
+    ...(rows.length ? rows : ['Nessun reel in calendario.']),
+    fattiRiga,
     pub.length ? `Già pubblicati a mano: ${pub.join(', ')}` : '',
     held.length ? `In attesa (non opere): ${held.join(' · ')} — /reel <numero> per mandarne uno` : '',
     '',
     `Pubblicazione: Instagram ${ig.configured() ? 'automatica' : 'a mano'} · Facebook ${fb.configured() ? 'automatica' : 'a mano'} · TikTok ${tiktok.configured() ? (tiktok.direct() ? 'automatica' : 'in bozza') : 'a mano'}`,
     'Legenda: • in attesa · 📤 inviato · 📸 su Instagram · ✅ anche su TikTok',
+    'Un reel pubblicato esce dal calendario e gli altri scalano negli slot liberi.',
   ].filter(Boolean).join('\n');
 }
 
 const HELP = `Reel (Instagram e TikTok):
 /reel — manda subito il prossimo pacchetto (anche: /reel 3)
-/reels — calendario e stato
+/reels — calendario, stato e pulsanti per scegliere quale reel pubblicare ora
 /didascalia 3 — riscrivi la didascalia del reel 3
 /tag 3 — scegli chi taggare e i collaboratori
 /pubblicareel 3 — pubblica subito il reel 3 su Instagram
@@ -301,21 +371,30 @@ async function onCommand(cmd, arg, chatId) {
       await send(`⏳ Preparo il pacchetto del reel ${it.reel}…`);
       return sendPackage(it, chatId, { manual: true });
     }
-    case 'reels': return send(esc(statusText()));
+    case 'reels': {
+      const scegli = [];
+      const liberi = items().filter(x => !isDone(x.id));
+      const attesa = plan().items.filter(i => i.skipped && i.status === 'hold' && !isDone(i.id)).map(withEdits);
+      for (const x of [...liberi, ...attesa]) {
+        scegli.push({ text: `▶️ ${x.reel} · ${String(x.title).slice(0, 24)}`, callback_data: `rl:go:${x.id}` });
+      }
+      const rows = [];
+      for (let i = 0; i < scegli.length; i += 2) rows.push(scegli.slice(i, i + 2));
+      return send(esc(statusText()) + (rows.length ? '\n\n<i>Tocca un reel per averne subito il pacchetto, anche fuori calendario.</i>' : ''),
+        rows.length ? { reply_markup: { inline_keyboard: rows } } : undefined);
+    }
     case 'pubblicato': {
       const it = findReel(arg);
       if (!it) return send('Quale reel? Esempio: /pubblicato 3');
-      state.done[it.id] = { ...(state.done[it.id] || {}), instagram: Date.now(), tiktok: (state.done[it.id] || {}).tiktok || null };
-      saveState();
-      const next = items().find(x => !isDone(x.id));
-      return send(`✅ Reel ${it.reel} segnato come pubblicato su Instagram.${next ? `\nProssimo: reel ${next.reel} · ${esc(next.title)} — ${esc(dateIt(next.date))}.` : '\nEra l\'ultimo del calendario 🎉'}`);
+      markDone(it.id, { instagram: Date.now() });
+      return send(`✅ Reel ${it.reel} segnato come pubblicato su Instagram.\n${afterPublish(it)}`);
     }
     case 'rimanda': {
       const it = findReel(arg);
       if (!it || !it.date) return send('Quale reel? Esempio: /rimanda 3');
       state.postponed[it.id] = addDays(it.date, 3);
-      delete state.sent[it.id]; saveState();
-      return send(`⏭ Reel ${it.reel} spostato a ${esc(dateIt(state.postponed[it.id]))}.`);
+      delete state.sent[it.id]; saveState(); reschedule();
+      return send(`⏭ Reel ${it.reel} spostato a ${esc(dateIt(state.postponed[it.id]))}. Gli altri si sono risistemati negli slot liberi.`);
     }
     case 'pubblicareel': {
       const it = findReel(arg) || items().find(x => !isDone(x.id));
@@ -373,14 +452,16 @@ async function onCallback(action, id, cb) {
   if (!it) return bot.send(chatId, 'Reel non trovato.');
   const d = state.done[it.id] || { instagram: null, tiktok: null };
   if (action === 'ig') {
-    d.instagram = Date.now(); state.done[it.id] = d; saveState();
-    const next = items().find(x => !isDone(x.id));
-    return bot.send(chatId, `✅ Reel ${it.reel} pubblicato su Instagram. Alle ${esc(it.tiktokTime)} ti ricordo TikTok.${next ? `\nProssimo: reel ${next.reel} · ${esc(next.title)} — ${esc(dateIt(next.date))}.` : ''}`);
+    markDone(it.id, { instagram: Date.now() });
+    return bot.send(chatId, `✅ Reel ${it.reel} pubblicato su Instagram.\n${afterPublish(it)}`);
   }
   if (action === 'tt') {
-    d.tiktok = Date.now(); if (!d.instagram) d.instagram = Date.now();
-    state.done[it.id] = d; saveState();
+    markDone(it.id, { tiktok: Date.now(), instagram: d.instagram || Date.now() });
     return bot.send(chatId, `🎵 Reel ${it.reel} segnato anche su TikTok. ${items().filter(x => !isDone(x.id)).length} reel ancora in calendario.`);
+  }
+  if (action === 'go') {
+    await bot.send(chatId, `⏳ Preparo il pacchetto del reel ${it.reel}…`);
+    return sendPackage(it, chatId, { manual: true });
   }
   if (action === 'pig') {
     if (isDone(it.id) && d.instagramId) return bot.send(chatId, `Il reel ${it.reel} è già stato pubblicato${d.permalink ? ': ' + d.permalink : ''}.`);
@@ -405,7 +486,7 @@ async function onCallback(action, id, cb) {
   if (action === 'pp') {
     if (!it.date) return bot.send(chatId, 'Questo reel non è in calendario.');
     state.postponed[it.id] = addDays(state.postponed[it.id] || it.date, 3);
-    delete state.sent[it.id]; saveState();
+    delete state.sent[it.id]; saveState(); reschedule();
     return bot.send(chatId, `⏭ Reel ${it.reel} spostato a ${esc(dateIt(state.postponed[it.id]))}.`);
   }
 }
@@ -417,6 +498,7 @@ function init({ app, dataDir, adminAuth, blog }) {
   loadState();
   const p = plan();
   if (!p.items || !p.items.length) { warn('social-plan.json assente o vuoto: modulo spento'); return; }
+  reschedule();
 
   bot.registerModule({
     name: 'social',
