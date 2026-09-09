@@ -24,7 +24,9 @@ const P = {
   },
   groq: {
     keyVar: 'GROQ_API_KEY', kind: 'openai', base: 'https://api.groq.com/openai/v1',
-    models: () => uniq([env('GROQ_MODEL'), 'llama-3.3-70b-versatile', 'openai/gpt-oss-120b']),
+    // llama-3.3-70b-versatile e' stato ritirato da Groq (404 model_not_found, 9 set 2026):
+    // resta in coda nel caso torni, ma non deve piu' essere il primo tentativo.
+    models: () => uniq([env('GROQ_MODEL'), 'openai/gpt-oss-120b', 'llama-3.1-8b-instant', 'llama-3.3-70b-versatile']),
     visionModels: () => uniq([env('GROQ_VISION_MODEL'), 'meta-llama/llama-4-scout-17b-16e-instruct']),
   },
   openrouter: {
