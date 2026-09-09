@@ -94,7 +94,10 @@ async function api(pathname, { method = 'GET', params = {}, timeoutMs = 60000 } 
   try { j = JSON.parse(text); } catch (e) { throw new Error(`risposta non JSON (${r.status}): ${text.slice(0, 200)}`); }
   if (!r.ok || j.error) {
     const e = j.error || {};
-    throw new Error(`${r.status} ${e.code || ''} ${e.error_user_title || ''} ${e.message || text.slice(0, 200)}`.replace(/\s+/g, ' ').trim());
+    warn('errore API', pathname, text.slice(0, 500));   // mai loggare `url`: in GET contiene access_token
+    const sub = e.error_subcode ? `#${e.error_subcode}` : '';
+    const det = [e.error_user_title, e.error_user_msg, e.message].filter(Boolean).join(' — ') || text.slice(0, 200);
+    throw new Error(`${r.status} ${e.code || ''} ${sub} ${det}`.replace(/\s+/g, ' ').trim());
   }
   return j;
 }
@@ -102,11 +105,25 @@ async function api(pathname, { method = 'GET', params = {}, timeoutMs = 60000 } 
 /** Pagina collegata: { id, name } — serve a verificare il token */
 const me = () => api(PAGE(), { params: { fields: 'id,name,followers_count' } });
 
-/** scadenza del token: i token di Pagina derivati da un token utente lungo non scadono */
+/**
+ * Scadenza del token: si ispeziona QUELLO CHE SCADE DAVVERO.
+ * Con la via FB_USER_TOKEN il token di Pagina è derivato e non scade mai (expires_at 0):
+ * ispezionarlo direbbe sempre «token senza scadenza» mentre è il token utente
+ * (60 giorni) a fermare tutto quando muore. → { valid, expiresAt, scopes, type, source }
+ */
 async function tokenInfo() {
-  const j = await api('debug_token', { params: { input_token: await TOKEN() } });
+  const esplicito = dynamicToken || env('FB_PAGE_TOKEN');
+  const daIspezionare = esplicito || env('FB_USER_TOKEN');
+  const j = await api('debug_token', { params: { input_token: daIspezionare } });
   const d = j.data || {};
-  return { valid: !!d.is_valid, expiresAt: d.expires_at || 0, scopes: d.scopes || [], type: d.type || '' };
+  return {
+    valid: !!d.is_valid,
+    expiresAt: d.expires_at || 0,
+    dataAccessExpiresAt: d.data_access_expires_at || 0,
+    scopes: d.scopes || [],
+    type: d.type || '',
+    source: esplicito ? 'token di Pagina' : 'token utente (FB_USER_TOKEN)',
+  };
 }
 
 /**
@@ -125,11 +142,22 @@ async function publishReel({ videoUrl, description = '', onProgress = () => {} }
   onProgress('sessione aperta', videoId);
 
   log('Facebook scarica il video…');
-  const up = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: { Authorization: `OAuth ${await TOKEN()}`, file_url: videoUrl, offset: '0' },
-    signal: AbortSignal.timeout(10 * 60 * 1000),
-  });
+  // Nota: il timeout utile NON è questo. Node (undici) taglia da solo l'attesa della risposta
+  // a 5 minuti con UND_ERR_HEADERS_TIMEOUT, e senza questo catch l'errore arriverebbe come
+  // un nudo «fetch failed», nascondendo la causa più probabile (video non scaricabile).
+  let up;
+  try {
+    up = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { Authorization: `OAuth ${await TOKEN()}`, file_url: videoUrl, offset: '0' },
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+    });
+  } catch (e) {
+    const causa = (e && e.cause && (e.cause.code || e.cause.message)) || e.name || '';
+    throw new Error(`Facebook non ha risposto durante il caricamento (${e.message}${causa ? ' — ' + causa : ''}). `
+      + `Di solito vuol dire che non è riuscito a scaricare ${videoUrl}: controlla che sia pubblico, che pesi meno di ~20 MB `
+      + `e che robots.txt non blocchi facebookexternalhit. Il reel non è stato pubblicato: puoi ripremere il pulsante.`);
+  }
   const upText = await up.text();
   let upJson = {};
   try { upJson = JSON.parse(upText); } catch (e) {}
@@ -148,23 +176,32 @@ async function publishReel({ videoUrl, description = '', onProgress = () => {} }
   // l'elaborazione continua dopo il finish: aspetto che sia pubblicato davvero
   const started = Date.now();
   let last = '';
+  let errori = 0;   // letture di stato fallite di fila: ingoiarle in silenzio nascondeva anche i token revocati
   while (Date.now() - started < 8 * 60 * 1000) {
     await sleep(6000);
     let st;
-    try { st = await api(videoId, { params: { fields: 'status,permalink_url' } }); }
-    catch (e) { continue; }
+    try { st = await api(videoId, { params: { fields: 'status,permalink_url' } }); errori = 0; }
+    catch (e) {
+      if (++errori >= 5) throw new Error(`Facebook: non riesco a leggere lo stato del video ${videoId} (${errori} tentativi falliti): ${e.message}`);
+      warn('lettura dello stato fallita, riprovo:', e.message);
+      continue;
+    }
     const s = st.status || {};
     const phase = `${s.video_status || ''}/${s.publishing_phase && s.publishing_phase.status || ''}`;
     if (phase !== last) { last = phase; log('stato', phase); onProgress(phase, videoId); }
+    // gli errori PRIMA del successo: con publishing_phase in errore video_status può restare "ready"
+    const ko = ['uploading_phase', 'processing_phase', 'publishing_phase']
+      .map(k => s[k]).find(p => p && p.status === 'error');
+    if (s.video_status === 'error' || s.video_status === 'expired' || ko) {
+      throw new Error(`Facebook: elaborazione fallita (${JSON.stringify(s).slice(0, 300)})`);
+    }
     if (s.video_status === 'ready' || (s.publishing_phase && s.publishing_phase.status === 'complete')) {
       return { id: videoId, permalink: st.permalink_url || `https://www.facebook.com/reel/${videoId}` };
     }
-    if (s.video_status === 'error' || (s.uploading_phase && s.uploading_phase.status === 'error')) {
-      throw new Error(`Facebook: elaborazione fallita (${JSON.stringify(s).slice(0, 200)})`);
-    }
   }
-  // non è un errore: spesso finisce di elaborare da solo poco dopo
-  return { id: videoId, permalink: `https://www.facebook.com/reel/${videoId}`, pending: true };
+  // non è un errore: spesso finisce di elaborare da solo poco dopo. `pending` NON è una conferma.
+  warn(`il video ${videoId} sta ancora elaborando dopo 8 minuti (ultimo stato: ${last || 'sconosciuto'})`);
+  return { id: videoId, permalink: `https://www.facebook.com/reel/${videoId}`, pending: true, status: last || 'sconosciuto' };
 }
 
 /** quale via si sta usando: utile in /social */

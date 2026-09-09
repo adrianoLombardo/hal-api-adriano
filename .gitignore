@@ -8,3 +8,6 @@ blog-work/
 
 # stato del bot social (token Instagram e refresh TikTok): mai nel repo
 social-state.json
+
+# stato Spotify (access e refresh token dell'account): mai nel repo
+spotify-tokens.json

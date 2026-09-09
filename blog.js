@@ -42,21 +42,40 @@ let pollingAbort = null;
 
 /* ── stato persistente ── */
 function defaultState() {
-  return { ownerChatId: env('TELEGRAM_OWNER_ID') ? Number(env('TELEGRAM_OWNER_ID')) : null, paused: false, nextRunAt: null, usedTopics: [], drafts: {}, published: [], lastReminderAt: null, lastError: null, pollOffset: 0, startedAt: Date.now() };
+  return { ownerChatId: env('TELEGRAM_OWNER_ID') ? Number(env('TELEGRAM_OWNER_ID')) : null, claimLocked: false, paused: false, nextRunAt: null, usedTopics: [], drafts: {}, published: [], lastReminderAt: null, lastError: null, pollOffset: 0, startedAt: Date.now() };
 }
 function loadState() {
-  try { state = Object.assign(defaultState(), JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))); }
-  catch (e) { state = defaultState(); }
+  state = defaultState();
+  let raw = null;
+  try { raw = fs.readFileSync(STATE_FILE, 'utf8'); }
+  catch (e) {
+    // ENOENT = primo avvio, nessuno stato da perdere; qualsiasi altro errore blocca la rivendicazione
+    if (e.code !== 'ENOENT') { warn('blog-state.json non leggibile:', e.message); state.claimLocked = true; }
+  }
+  if (raw !== null) {
+    try { Object.assign(state, JSON.parse(raw)); }
+    catch (e) {
+      warn('blog-state.json illeggibile, NON riparto da zero:', e.message);
+      try { fs.renameSync(STATE_FILE, `${STATE_FILE}.corrotto-${Date.now()}`); } catch (_) {}
+      state.claimLocked = true; // niente auto-rivendicazione dopo una perdita di stato
+    }
+  }
   if (env('TELEGRAM_OWNER_ID')) state.ownerChatId = Number(env('TELEGRAM_OWNER_ID'));
 }
 function saveState() {
-  try { fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); } catch (e) { warn('salvataggio stato fallito:', e.message); }
+  try {
+    const tmp = `${STATE_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+    fs.renameSync(tmp, STATE_FILE); // scrittura atomica: un riavvio a meta non lascia un file troncato
+  } catch (e) { warn('salvataggio stato fallito:', e.message); }
 }
 function topics() {
   try { return JSON.parse(fs.readFileSync(TOPICS_FILE, 'utf8')); } catch (e) { return { topics: [], existing: [] }; }
 }
 function pendingDraft() { return Object.values(state.drafts).find(d => d.status === 'pending'); }
 function draftsSorted() { return Object.values(state.drafts).sort((a, b) => b.createdAt - a.createdAt); }
+// tieni solo le ultime 20 bozze: senza potatura blog-state.json cresce e viene riscritto per intero a ogni update
+function potaBozze() { for (const d of draftsSorted().slice(20)) delete state.drafts[d.id]; }
 
 /* ── date in Europa/Roma ── */
 function romeParts(ms) {
@@ -93,6 +112,9 @@ function sanitizeBody(html) {
   let s = String(html || '');
   s = s.replace(/<\s*(script|style|iframe|object|embed)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '');
   s = s.replace(/<!--[\s\S]*?-->/g, '');
+  // un '<' che non puo' aprire un tag (cifra, spazio, '=', punteggiatura) e' testo: "<20 ms" deve restare.
+  // Senza questo la ripulitura dei tag piu' sotto mangia da li' fino al primo '>', cioe' anche il tag di chiusura.
+  s = s.replace(/<(?![a-zA-Z\/!?])/g, '&lt;');
   s = s.replace(/<\/?(html|head|body|article|main|section|div|span|header|footer|figure|figcaption|img|table|thead|tbody|tr|td|th|hr|h1|h4|h5|h6)\b[^>]*>/gi, (m) => /^<\/?h[1456]/i.test(m) ? (m[1] === '/' ? '</h3>' : '<h3>') : '');
   s = s.replace(/<(\/?)(p|h2|h3|ul|ol|li|strong|em|b|i|blockquote|br)\b[^>]*>/gi, (m, close, tag) => `<${close}${tag.toLowerCase()}>`);
   s = s.replace(/<a\b([^>]*)>/gi, (m, attrs) => {
@@ -114,8 +136,12 @@ function htmlToTelegram(html) {
   let s = String(html || '');
   s = s.replace(/<(strong|b)\b[^>]*>/gi, '\u0001B').replace(/<\/(strong|b)>/gi, '\u0001b');
   s = s.replace(/<(em|i)\b[^>]*>/gi, '\u0001I').replace(/<\/(em|i)>/gi, '\u0001i');
-  s = s.replace(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi, (m, t) => `\n\n\u0001B${decodeEntities(t.replace(/<[^>]+>/g, '')).toUpperCase()}\u0001b\n`);
-  s = s.replace(/<h3\b[^>]*>([\s\S]*?)<\/h3>/gi, (m, t) => `\n\u0001B${decodeEntities(t.replace(/<[^>]+>/g, ''))}\u0001b\n`);
+  // I segnaposto differiscono solo per il caso della lettera ('B' apre, 'b' chiude): dentro un titolo
+  // il toUpperCase() qui sotto trasformerebbe le chiusure in aperture e l'HTML uscirebbe sbilanciato
+  // (Telegram rifiuta l'intero messaggio). Il titolo e' gia' tutto in grassetto: l'enfasi interna si toglie.
+  const senzaSegni = (t) => t.replace(/\u0001[BbIi]/g, '');
+  s = s.replace(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi, (m, t) => `\n\n\u0001B${senzaSegni(decodeEntities(t.replace(/<[^>]+>/g, ''))).toUpperCase()}\u0001b\n`);
+  s = s.replace(/<h3\b[^>]*>([\s\S]*?)<\/h3>/gi, (m, t) => `\n\u0001B${senzaSegni(decodeEntities(t.replace(/<[^>]+>/g, '')))}\u0001b\n`);
   s = s.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (m, t) => `• ${t.trim()}\n`);
   s = s.replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (m, t) => `\n\u0001I«${t.replace(/<[^>]+>/g, '').trim()}»\u0001i\n`);
   s = s.replace(/<p\b[^>]*>([\s\S]*?)<\/p>/gi, (m, t) => `${t.trim()}\n\n`);
@@ -153,7 +179,13 @@ const BIO = `Fatti biografici utilizzabili (SOLO questi): nato a Segrate, vicino
 function systemPrompt(format = 'guida') {
   const t = topics();
   const F = FORMATS[formatOf(format)];
-  const existing = (t.existing || []).map(e => `- ${e.title} → ${SITE}${e.url}`).join('\n');
+  // blog-topics.json elenca solo gli articoli scritti a mano: unisco quelli pubblicati dal bot,
+  // altrimenti il modello riscrive contenuti già online e non può linkarli (i link interni sono ristretti a questa lista).
+  const pubblicati = ((state && state.published) || []).map(p => ({ title: p.title, url: String(p.url || `/blog/${p.slug}.html`).replace(SITE, '') }));
+  const visti = new Set();
+  const existing = [...(t.existing || []), ...pubblicati]
+    .filter(e => e && e.url && !visti.has(e.url) && visti.add(e.url))
+    .map(e => `- ${e.title} → ${SITE}${e.url}`).join('\n');
   return `Scrivi un articolo (${F.label}) per il blog di ${SITE}/blog. Il blog è la voce redazionale del sito: racconta il lavoro di Adriano Lombardo dall'esterno, NON è lui che parla in prima persona.
 Di chi parli: Adriano Lombardo, Creative Technologist e light designer, Milano. Progetta installazioni immersive e interattive, projection mapping, light design, arte generativa e opere che usano segnali EEG (onde cerebrali). Strumenti che usa davvero: TouchDesigner, NotchVFX, Avolites (piattaforma Titan) per le luci, Capture per il progetto illuminotecnico e la previsualizzazione, Resolume, Three.js, sensori (LIDAR, telecamere di profondità), headset EEG consumer a pochi elettrodi.
 FATTI TECNICI DA NON SBAGLIARE: la console di Adriano è Avolites, non grandMA3; grandMA3 è di MA Lighting, un altro produttore, e con qualsiasi banco l'integrazione passa da ArtNet/sACN e DMX. Il progetto illuminotecnico e il pre-viz si fanno in Capture, non in Vectorworks né AutoCAD.
@@ -316,7 +348,7 @@ async function geminiImage(prompt) {
       let r;
       try {
         r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: 'POST', headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(150000) });
-      } catch (e) { errors.push(`${model}: ${e.message}`); warn(`immagine ${model}: ${e.message}`); break; }
+      } catch (e) { errors.push(`${model}: ${e.message}`); warn(`immagine ${model}: ${e.message}`); badImageModel[model] = Date.now() + 5 * 60 * 1000; break; } // in pausa: il secondo giro non rifà la stessa attesa
       if (!r.ok) {
         const t = (await r.text().catch(() => '')).replace(/\s+/g, ' ');
         let msg = t; try { msg = JSON.parse(t).error?.message || t; } catch (e) {}
@@ -387,7 +419,9 @@ async function buildImageSet(buffer, slug) {
     await out(`${slug}-og.jpg`, base.clone().resize({ width: 1200, height: 630, fit: 'cover' }).jpeg({ quality: 82, mozjpeg: true }));
     return { src: `/img/blog/${slug}.jpg`, srcset: `/img/blog/${slug}-480.webp 480w, /img/blog/${slug}-1024.webp 1024w`, og: `/img/blog/${slug}-og.jpg`, files, preview: files[0].local };
   }
-  const ext = /png/i.test(String(buffer.slice(0, 8).toString('hex'))) ? 'png' : 'jpg';
+  // firma dei byte, non il nome del formato: una stringa esadecimale non può contenere "png"
+  const firma = buffer.slice(0, 4).toString('hex');
+  const ext = firma === '89504e47' ? 'png' : firma.startsWith('52494646') ? 'webp' : 'jpg';
   const local = path.join(dir, `${slug}.${ext}`);
   fs.writeFileSync(local, buffer);
   files.push({ local, remote: `img/blog/${slug}.${ext}` });
@@ -404,9 +438,13 @@ async function makeCover(article, topic) {
       if (name === 'huggingface' && env('HF_TOKEN')) providers.push(['Hugging Face', () => hfImage(prompt)]);
       if (name === 'pollinations') providers.push(['Pollinations', () => pollinationsImage(prompt)]);
     }
-    for (let round = 1; round <= 2; round++) {
+    // tetto di tempo: createDraft tiene busy=true e il polling Telegram è uno solo, quindi una catena
+    // di generatori in timeout terrebbe muto tutto il bot (blog e reel) per decine di minuti.
+    const scadenza = Date.now() + Math.max(30000, Number(env('BLOG_IMAGE_BUDGET_MS', '300000')) || 300000);
+    giri: for (let round = 1; round <= 2; round++) {
       if (round === 2) { warn('generatori di immagini non disponibili, secondo tentativo tra 20 s'); await new Promise(r => setTimeout(r, 20000)); }
       for (const [label, fn] of providers) {
+        if (Date.now() > scadenza) { warn('tempo massimo per la copertina esaurito, uso una foto del sito'); break giri; }
         try {
           const g = await fn();
           const set = await buildImageSet(g.buffer, article.slug);
@@ -431,7 +469,7 @@ const NAV = `<header class="sn">
   <nav class="sn-links" aria-label="Principale">
     <a href="/">Home</a><a href="/works.html">Works</a><a href="/case-studies.html">Case Studies</a>
     <a href="/network.html">Network</a><a href="/brands.html">Brands</a><a href="/neuro-flow.html">Neuro.Flow</a>
-    <a href="/lab.html">Lab</a><a href="/about.html">About</a><a href="/contact.html">Contact</a>
+    <a href="/lab.html">Lab</a><a href="/blog/" class="act">Blog</a><a href="/about.html">About</a><a href="/contact.html">Contact</a>
   </nav>
   <div class="sn-right"><a class="sn-lang" href="/en/" hreflang="en" lang="en">EN</a>
     <button class="sn-burger" type="button" aria-label="Menu" aria-expanded="false"><span></span><span></span></button></div>
@@ -510,7 +548,7 @@ ${preview ? '' : '<meta name="robots" content="index, follow">'}
 <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Grotesk:wght@300;400;500&display=swap" rel="stylesheet">
 <script type="application/ld+json">
-${JSON.stringify(ld, null, 2)}
+${JSON.stringify(ld, null, 2).replace(/</g, '\\u003c')}
 </script>
 <link rel="stylesheet" href="/css/site.css?v=5">
 <style>
@@ -583,7 +621,16 @@ function feedEntry(a, img, date) {
 }
 function updateFeed(jsonText, entry, date) {
   let feed = { updated: date, posts: [] };
-  try { const j = JSON.parse(jsonText || ''); if (j && Array.isArray(j.posts)) feed = j; } catch (e) {}
+  // un feed presente ma illeggibile NON va sostituito con uno da un solo articolo:
+  // meglio interrompere la pubblicazione che azzerare la pagina #blog della SPA.
+  const t = String(jsonText || '').trim();
+  if (t) {
+    let j;
+    try { j = JSON.parse(t); }
+    catch (e) { throw new Error('blog/posts.json corrotto o incompleto: non lo sovrascrivo (rigenerare con tools/build-blog-feed.mjs)'); }
+    if (!j || !Array.isArray(j.posts)) throw new Error('blog/posts.json senza array posts: non lo sovrascrivo');
+    feed = j;
+  }
   feed.posts = [entry].concat((feed.posts || []).filter(p => p && p.slug !== entry.slug));
   feed.updated = date;
   return JSON.stringify(feed, null, 2) + '\n';
@@ -631,9 +678,32 @@ async function ftpDownloadText(client, remote) {
   await client.downloadTo(tmp, remote);
   const t = fs.readFileSync(tmp, 'utf8'); fs.unlinkSync(tmp); return t;
 }
+/** Carica in due tempi: prima un nome temporaneo, poi la rinomina. Un trasferimento interrotto
+ *  sporca solo il file .part, mai blog/index.html, sitemap.xml o posts.json già online. */
 async function ftpUploadText(client, remote, text) {
   const tmp = path.join(WORK_DIR, 'ul-' + crypto.randomBytes(4).toString('hex'));
-  fs.writeFileSync(tmp, text); await client.uploadFrom(tmp, remote); fs.unlinkSync(tmp);
+  const part = `${remote}.part-${crypto.randomBytes(3).toString('hex')}`;
+  const atteso = Buffer.byteLength(text);
+  fs.writeFileSync(tmp, text);
+  try {
+    await client.uploadFrom(tmp, part);
+    const size = await client.size(part).catch(() => -1);
+    if (size >= 0 && size !== atteso) throw new Error(`caricamento incompleto di ${remote} (${size} byte su ${atteso})`);
+    try {
+      await client.rename(part, remote);
+    } catch (e1) {
+      // qualche server FTP non rinomina sopra un file esistente: allora carico direttamente,
+      // così il file non resta mai assente dal sito (comportamento di prima, non peggiore).
+      warn(`rinomina di ${remote} non riuscita (${e1.message}), carico direttamente`);
+      await client.uploadFrom(tmp, remote);
+      await client.remove(part).catch(() => {});
+    }
+  } catch (e) {
+    await client.remove(part).catch(() => {});
+    throw e;
+  } finally {
+    try { fs.unlinkSync(tmp); } catch (e) {}
+  }
 }
 
 async function indexNow(urls) {
@@ -655,6 +725,10 @@ async function publish(draft) {
   fs.writeFileSync(path.join(WORK_DIR, a.slug, 'article.html'), html);
   if (DRY_RUN) {
     const siteDir = env('SITE_LOCAL_DIR', path.join(__dirname, '..'));
+    if (fs.existsSync(path.join(siteDir, 'blog', `${a.slug}.html`)) && !draft.publishAttempt) {
+      throw new Error(`esiste già /blog/${a.slug}.html: non lo sovrascrivo. Riscrivi l'articolo (/nuovo) oppure cambia il titolo per avere uno slug diverso`);
+    }
+    draft.publishAttempt = true;
     const outDir = path.join(WORK_DIR, 'dry-run'); fs.mkdirSync(path.join(outDir, 'blog'), { recursive: true }); fs.mkdirSync(path.join(outDir, 'img', 'blog'), { recursive: true });
     fs.writeFileSync(path.join(outDir, 'blog', `${a.slug}.html`), html);
     for (const f of img.files) fs.copyFileSync(f.local, path.join(outDir, f.remote));
@@ -668,6 +742,13 @@ async function publish(draft) {
   } else {
     await withFtp(async (client) => {
       const root = remoteRoot();
+      // Che cosa c'è davvero online: la guardia sugli slug in articleFromSections vede solo blog-topics.json
+      // e state.published, quindi non conosce gli articoli pubblicati a mano né quelli persi con il volume /data.
+      const elencoBlog = await client.list(`${root}/blog`);
+      if (elencoBlog.some(f => f.name === `${a.slug}.html`) && !draft.publishAttempt) {
+        throw new Error(`esiste già /blog/${a.slug}.html sul sito: non lo sovrascrivo. Riscrivi l'articolo (/nuovo) oppure cambia il titolo per avere uno slug diverso`);
+      }
+      draft.publishAttempt = true; saveState(); // un ritentativo dopo un errore a metà non viene bloccato
       if (img.files.length) { await client.ensureDir(`${root}/img/blog`); await client.cd('/'); }
       for (const f of img.files) { await client.uploadFrom(f.local, `${root}/${f.remote}`); log('caricato', f.remote); }
       await ftpUploadText(client, `${root}/blog/${a.slug}.html`, html); log('caricato blog/' + a.slug + '.html');
@@ -675,8 +756,12 @@ async function publish(draft) {
       await ftpUploadText(client, `${root}/blog/index.html`, insertCard(idx, card, a.slug)); log('aggiornato blog/index.html');
       const sm = await ftpDownloadText(client, `${root}/sitemap.xml`);
       await ftpUploadText(client, `${root}/sitemap.xml`, updateSitemap(sm, url, date)); log('aggiornato sitemap.xml');
+      // l'assenza del file va accertata, non dedotta da un errore qualsiasi: un timeout del canale dati
+      // o un 421/426/550 lascerebbe feedText vuoto e riscriverebbe il feed della SPA con UN SOLO articolo.
       let feedText = '';
-      try { feedText = await ftpDownloadText(client, `${root}/blog/posts.json`); } catch (e) { warn('blog/posts.json non trovato sul server, lo creo'); }
+      const voceFeed = elencoBlog.find(f => f.name === 'posts.json');
+      if (voceFeed && voceFeed.size > 0) feedText = await ftpDownloadText(client, `${root}/blog/posts.json`);
+      else warn('blog/posts.json assente sul server, lo creo');
       await ftpUploadText(client, `${root}/blog/posts.json`, updateFeed(feedText, feedEntry(a, img, date), date)); log('aggiornato blog/posts.json (feed della SPA)');
     });
     await indexNow([url, `${SITE}/blog/`]);
@@ -710,7 +795,8 @@ async function tg(method, payload = {}, files = null) {
 async function send(chatId, text, extra = {}) {
   try { return await tg('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...extra }); }
   catch (e) {
-    if (/parse|entit|tag/i.test(e.message)) return tg('sendMessage', { chat_id: chatId, text: text.replace(/<[^>]+>/g, ''), disable_web_page_preview: true, ...extra });
+    // senza parse_mode Telegram non decodifica piu' le entita': decodifico io, altrimenti arriva "Holy Club &amp; Sublime"
+    if (/parse|entit|tag/i.test(e.message)) return tg('sendMessage', { chat_id: chatId, text: decodeEntities(text.replace(/<[^>]+>/g, '')), disable_web_page_preview: true, ...extra });
     throw e;
   }
 }
@@ -730,7 +816,7 @@ async function sendDraft(draft, { onlyImage = false } = {}) {
   const previewUrl = publicUrl ? `${publicUrl}/api/blog/preview/${draft.id}` : '';
   const caption = `📝 <b>Articolo proposto per il blog</b>\n\n<b>${esc(a.title)}</b>\n${esc(a.excerpt)}\n\n✍️ ${esc(FORMATS[formatOf(a.format)].label)} · ⏱ ${a.minutes} min · ${a.words} parole · 🏷 ${esc(a.tags.join(', '))}\n🖼 Copertina: ${esc(img.kind === 'gemini' ? 'generata con ' + img.model : img.model + ' (' + img.src + ')')}${img.ripiego ? '\n⚠️ I generatori di immagini non hanno risposto: per ora una foto del sito. Ripremi «Nuova immagine» tra un minuto per una copertina dedicata.' : ''}\n🤖 Testo: ${esc(a.model || '-')}${previewUrl ? `\n\n🔗 <a href="${previewUrl}">Anteprima con lo stile del sito</a>` : ''}`;
   let m;
-  if (img.preview && fs.existsSync(img.preview)) m = await tg('sendPhoto', { chat_id: owner(), caption, parse_mode: 'HTML' }, { photo: { path: img.preview, type: 'image/jpeg', name: 'cover.jpg' } });
+  if (img.preview && fs.existsSync(img.preview)) m = await tg('sendPhoto', { chat_id: owner(), caption, parse_mode: 'HTML' }, { photo: { path: img.preview, type: 'image/jpeg', name: 'cover.jpg' } }).catch(() => send(owner(), caption));
   else m = await tg('sendPhoto', { chat_id: owner(), photo: SITE + img.src, caption, parse_mode: 'HTML' }).catch(() => send(owner(), caption));
   draft.messageIds = [m && m.message_id].filter(Boolean);
   if (!onlyImage) for (const chunk of splitMessage(htmlToTelegram(a.body))) { const r = await send(owner(), chunk); if (r) draft.messageIds.push(r.message_id); }
@@ -771,8 +857,7 @@ async function createDraft({ topicId = null, feedback = [], previous = null, kee
     const draft = { id: crypto.randomBytes(8).toString('hex'), topicId: topic.id, status: 'pending', createdAt: Date.now(), article, image, feedback: feedback.slice(), messageIds: [], version: previous ? (previous.version || 1) + 1 : 1 };
     for (const d of Object.values(state.drafts)) if (d.status === 'pending') d.status = 'superseded';
     state.drafts[draft.id] = draft;
-    // tieni solo le ultime 20 bozze
-    for (const d of draftsSorted().slice(20)) delete state.drafts[d.id];
+    potaBozze();
     state.lastError = null;
     saveState();
     return draft;
@@ -783,7 +868,16 @@ async function createAndSend(opts = {}) {
   let draft;
   try { draft = await createDraft(opts); }
   catch (e) { state.lastError = (e.message || '').slice(0, 300); saveState(); await notifyOwner(`❌ Non sono riuscito a preparare l'articolo: ${esc(state.lastError)}\n\nRiprova con /nuovo`); throw e; }
-  if (owner()) { try { await sendDraft(draft); } catch (e) { warn('invio bozza fallito:', e.message); } }
+  if (owner()) {
+    try { await sendDraft(draft); }
+    catch (e) {
+      // meta' articolo e nessun pulsante: senza avviso Adriano non sa che deve rimandarlo
+      warn('invio bozza fallito:', e.message);
+      draft.sendError = (e.message || '').slice(0, 300);
+      state.lastError = 'invio bozza: ' + draft.sendError; saveState();
+      await notifyOwner(`<b>Articolo pronto ma non consegnato</b>\n"${esc(draft.article.title)}" e' pronto, ma non sono riuscito a mandartelo tutto (${esc(draft.sendError)}).\nResta in attesa: /stato per rivederlo, /pubblica per pubblicarlo, /nuovo per rifarlo.`);
+    }
+  }
   return draft;
 }
 
@@ -796,7 +890,7 @@ async function regenerate(draft, { feedback = null, onlyImage = false } = {}) {
       const topic = pickTopic(draft.topicId);
       const image = await makeCover(draft.article, topic);
       const nd = { ...draft, id: crypto.randomBytes(8).toString('hex'), image, createdAt: Date.now(), status: 'pending', messageIds: [], version: (draft.version || 1) + 1 };
-      draft.status = 'superseded'; state.drafts[nd.id] = nd; saveState();
+      draft.status = 'superseded'; state.drafts[nd.id] = nd; potaBozze(); saveState();
       return nd;
     } finally { busy = false; }
   }
@@ -806,14 +900,19 @@ async function regenerate(draft, { feedback = null, onlyImage = false } = {}) {
 async function handlePublish(draft, chatId) {
   if (draft.status === 'published') return send(chatId, `Già pubblicato: ${draft.url}`);
   await send(chatId, '⏳ Pubblico sul sito…');
+  let url;
   try {
-    const url = await publish(draft);
-    await send(chatId, `✅ <b>Pubblicato</b>\n${url}\n\nIndice del blog e sitemap aggiornati, motori avvisati con IndexNow. Prossimo articolo: ${fmtWhen(state.nextRunAt)}.`, { disable_web_page_preview: false });
+    url = await publish(draft);
   } catch (e) {
     draft.status = 'pending'; state.lastError = 'pubblicazione: ' + (e.message || '').slice(0, 300); saveState();
     warn('pubblicazione fallita:', e.message);
-    await send(chatId, `❌ Pubblicazione fallita: ${esc((e.message || '').slice(0, 300))}\n\nLa bozza resta valida: riprova con /pubblica`);
+    return await send(chatId, `❌ Pubblicazione fallita: ${esc((e.message || '').slice(0, 300))}\n\nLa bozza resta valida: riprova con /pubblica`);
   }
+  // il sito è già aggiornato: se salta solo il messaggio di conferma la bozza NON torna in attesa,
+  // altrimenti un secondo /pubblica ripubblicherebbe lo stesso articolo con una data diversa.
+  try {
+    await send(chatId, `✅ <b>Pubblicato</b>\n${url}\n\nIndice del blog e sitemap aggiornati, motori avvisati con IndexNow. Prossimo articolo: ${fmtWhen(state.nextRunAt)}.`, { disable_web_page_preview: false });
+  } catch (e) { warn('conferma Telegram non inviata:', e.message); }
 }
 
 /* Moduli che condividono questo bot (es. social.js): comandi e pulsanti propri, un solo polling */
@@ -840,12 +939,24 @@ async function onMessage(msg) {
   const text = String(msg.text || '').trim();
   if (!chatId) return;
   if (!owner()) {
-    if (/^\/start/.test(text)) { state.ownerChatId = chatId; if (!state.nextRunAt) state.nextRunAt = nextSlot(INTERVAL_DAYS); saveState(); log('proprietario collegato:', chatId); return send(chatId, `Ciao Adriano, collegato ✅\n\n${esc(HELP)}${moduleHelp()}\n\nPrimo articolo automatico: ${fmtWhen(state.nextRunAt)}. Se vuoi vederne uno adesso: /nuovo`); }
+    // la rivendicazione richiede il codice condiviso: "/start <codice>" con TELEGRAM_CLAIM_CODE.
+    // Senza codice il bot resta senza proprietario e si collega solo con TELEGRAM_OWNER_ID o POST /api/admin/blog/owner.
+    const mStart = /^\/start(?:@\w+)?\s*(\S*)/.exec(text);
+    if (mStart) {
+      const code = env('TELEGRAM_CLAIM_CODE');
+      if (code && !state.claimLocked && mStart[1] === code) {
+        state.ownerChatId = chatId; if (!state.nextRunAt) state.nextRunAt = nextSlot(INTERVAL_DAYS); saveState(); log('proprietario collegato:', chatId);
+        return send(chatId, `Ciao Adriano, collegato ✅\n\n${esc(HELP)}${moduleHelp()}\n\nPrimo articolo automatico: ${fmtWhen(state.nextRunAt)}. Se vuoi vederne uno adesso: /nuovo`);
+      }
+      warn('rivendicazione rifiutata dalla chat', chatId, state.claimLocked ? '(stato perso: rivendicazione bloccata)' : code ? '(codice sbagliato)' : '(TELEGRAM_CLAIM_CODE non impostata)');
+    }
     return send(chatId, 'Questo bot è privato.');
   }
   if (chatId !== owner()) return send(chatId, 'Questo bot è privato.');
-  const cmd = (/^\/([a-z]+)(?:@\w+)?\s*(.*)$/i.exec(text) || [])[1];
-  const arg = (/^\/[a-z]+(?:@\w+)?\s*(.*)$/i.exec(text) || [])[2] || '';
+  // un solo exec: [1] = comando, [2] = argomento (anche su piu' righe, serve a /didascalia)
+  const mCmd = /^\/([a-z]+)(?:@\w+)?\s*([\s\S]*)$/i.exec(text) || [];
+  const cmd = mCmd[1];
+  const arg = (mCmd[2] || '').trim();
   const pending = pendingDraft();
   const lower = (cmd || '').toLowerCase();
   const mod = modules.find(m => (m.commands || []).includes(lower));
@@ -867,7 +978,20 @@ async function onMessage(msg) {
       case 'argomenti': case 'topics': {
         const all = topics().topics;
         const lines = all.map(t => `${state.usedTopics.includes(t.id) ? '✔' : '•'} [${formatOf(t.format)}] ${t.id} — ${t.title}`);
-        return send(chatId, `<b>Argomenti</b> (✔ = già usato)\n\n${esc(lines.join('\n'))}\n\nPer sceglierne uno: /nuovo id-argomento`);
+        // 42 argomenti superano il limite di 4096 caratteri di sendMessage: spezzo il messaggio per righe.
+        // L'await serve: senza, un errore di Telegram scavalca il catch di onMessage e finisce solo nel log.
+        const parti = [];
+        let buf = '';
+        for (const l of lines) {
+          const r = esc(l) + '\n';
+          if (buf && (buf + r).length > 3500) { parti.push(buf); buf = ''; }
+          buf += r;
+        }
+        parti.push(buf);
+        parti[0] = `<b>Argomenti</b> (✔ = già usato)\n\n` + parti[0];
+        parti[parti.length - 1] += `\n\nPer sceglierne uno: /nuovo id-argomento`;
+        for (const parte of parti) await send(chatId, parte);
+        return;
       }
       case 'salta': case 'skip':
         if (!pending) return send(chatId, 'Nessuna bozza in attesa.');
@@ -895,7 +1019,7 @@ async function onMessage(msg) {
           try {
             const image = await makeCover(pending.article, tp);
             nd = { ...pending, id: crypto.randomBytes(8).toString('hex'), image, createdAt: Date.now(), status: 'pending', messageIds: [], version: (pending.version || 1) + 1 };
-            pending.status = 'superseded'; state.drafts[nd.id] = nd; saveState();
+            pending.status = 'superseded'; state.drafts[nd.id] = nd; potaBozze(); saveState();
           } finally { busy = false; }
           await sendDraft(nd, { onlyImage: true });
           return;
@@ -918,7 +1042,12 @@ async function onCallback(cb) {
   const mod = modules.find(m => (m.prefixes || []).includes(parts[0]));
   if (mod) {
     await answer('');
-    try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: cb.message.message_id, reply_markup: { inline_keyboard: [] } }); } catch (e) {}
+    // Le tastiere dei moduli hanno più azioni indipendenti (Instagram, Facebook, TikTok, didascalia, tag, rimanda,
+    // e la lista di /reels con un pulsante per reel): svuotarle a ogni tocco toglie i pulsanti che il modulo
+    // stesso invita a premere subito dopo. La cancellazione è quindi a richiesta: registerModule({ clearKeyboard: true }).
+    if (mod.clearKeyboard === true) {
+      try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: cb.message.message_id, reply_markup: { inline_keyboard: [] } }); } catch (e) {}
+    }
     try { return await mod.onCallback(parts[1], parts.slice(2).join(':'), cb); }
     catch (e) { warn(`modulo ${mod.name}:`, e.message); return send(chatId, `❌ ${esc((e.message || '').slice(0, 300))}`); }
   }
@@ -1070,7 +1199,7 @@ function init({ app, dataDir, adminAuth, publicUrl: pu }) {
   // admin
   app.get('/api/admin/blog', adminAuth, (req, res) => res.json({ status: statusText(), state: { ownerChatId: state.ownerChatId, paused: state.paused, nextRunAt: state.nextRunAt, nextRun: fmtWhen(state.nextRunAt), usedTopics: state.usedTopics, published: state.published, lastError: state.lastError, drafts: draftsSorted().map(d => ({ id: d.id, status: d.status, title: d.article.title, slug: d.article.slug, words: d.article.words, image: d.image.kind, createdAt: d.createdAt, version: d.version })) } }));
   app.post('/api/admin/blog/run', adminAuth, async (req, res) => {
-    try { const d = await createAndSend({ topicId: (req.body && req.body.topic) || null }); res.json({ ok: true, id: d.id, title: d.article.title, words: d.article.words, image: d.image.kind, preview: publicUrl ? `${publicUrl}/api/blog/preview/${d.id}` : null }); }
+    try { const d = await createAndSend({ topicId: (req.body && req.body.topic) || null }); res.json({ ok: !d.sendError, sent: !d.sendError, sendError: d.sendError || null, id: d.id, title: d.article.title, words: d.article.words, image: d.image.kind, preview: publicUrl ? `${publicUrl}/api/blog/preview/${d.id}` : null }); }
     catch (e) { res.status(500).json({ error: e.message }); }
   });
   app.post('/api/admin/blog/publish/:id', adminAuth, async (req, res) => {

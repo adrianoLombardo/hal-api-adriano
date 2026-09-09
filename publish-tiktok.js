@@ -108,7 +108,9 @@ async function post(url, body, token) {
 /** profilo collegato: { open_id, display_name } — verifica che il refresh token sia valido */
 async function me() {
   const token = await accessToken();
-  const r = await fetch('https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name,username', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
+  // solo campi coperti da user.info.basic: `username` vuole user.info.profile, che non chiediamo
+  // mai in authUrl, e TikTok rifiuterebbe l'intera chiamata con scope_not_authorized.
+  const r = await fetch('https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name', { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
   const j = await r.json();
   if (j.error && j.error.code !== 'ok') throw new Error(j.error.message || j.error.code);
   return (j.data && j.data.user) || {};
@@ -139,9 +141,26 @@ async function sendVideo({ videoUrl, title = '', onProgress = () => {} }) {
   const endpoint = direct()
     ? 'https://open.tiktokapis.com/v2/post/publish/video/init/'
     : 'https://open.tiktokapis.com/v2/post/publish/inbox/video/init/';
-  const body = direct()
-    ? { post_info: { title: String(title).slice(0, 2200), privacy_level: env('TIKTOK_PRIVACY', 'PUBLIC_TO_EVERYONE'), disable_duet: false, disable_comment: false, disable_stitch: false }, source_info }
-    : { source_info };
+  let body = { source_info };
+  if (direct()) {
+    const post_info = { title: String(title).slice(0, 2200), privacy_level: env('TIKTOK_PRIVACY', 'PUBLIC_TO_EVERYONE'), disable_duet: false, disable_comment: false, disable_stitch: false };
+    // TikTok considera la lettura di creator_info un passo obbligatorio della pubblicazione
+    // diretta: privacy_level deve essere fra quelli permessi e le interazioni che il creatore
+    // ha disattivato vanno rispettate. Se la lettura fallisce si prosegue com'era prima.
+    try {
+      const info = ((await creatorInfo()) || {}).data || {};
+      const ammessi = info.privacy_level_options || [];
+      if (ammessi.length && !ammessi.includes(post_info.privacy_level)) {
+        const ripiego = ammessi.includes('SELF_ONLY') ? 'SELF_ONLY' : ammessi[0];
+        warn(`privacy_level ${post_info.privacy_level} non permesso per questo account: uso ${ripiego}`);
+        post_info.privacy_level = ripiego;
+      }
+      if (info.comment_disabled) post_info.disable_comment = true;
+      if (info.duet_disabled) post_info.disable_duet = true;
+      if (info.stitch_disabled) post_info.disable_stitch = true;
+    } catch (e) { warn('creator_info non letto, uso i valori predefiniti:', e.message); }
+    body = { post_info, source_info };
+  }
   onProgress('apro il caricamento');
   const init = await post(endpoint, body, token);
   const { publish_id, upload_url } = init.data || {};
@@ -153,15 +172,40 @@ async function sendVideo({ videoUrl, title = '', onProgress = () => {} }) {
     body: buf, signal: AbortSignal.timeout(300000),
   });
   if (!up.ok) throw new Error(`caricamento fallito: ${up.status} ${(await up.text().catch(() => '')).slice(0, 160)}`);
-  log(`${direct() ? 'pubblicato' : 'mandato in bozza'}: ${publish_id} (${(size / 1048576).toFixed(1)} MB)`);
-  return { publish_id, mode: direct() ? 'diretta' : 'bozza' };
+
+  // TikTok elabora DOPO il caricamento: un 201 non garantisce che il video arrivi né in bozza
+  // né in feed. Senza questo controllo un FAILED resta invisibile e il reel viene segnato
+  // come fatto. Regola: solo un FAILED esplicito annulla; ogni altro esito (anche uno stato
+  // illeggibile) lascia il comportamento di prima, così un caricamento buono non diventa
+  // mai un falso errore.
+  onProgress('TikTok sta elaborando');
+  let esito = '';
+  let motivo = '';
+  let errori = 0;
+  for (let i = 0; publish_id && i < 20; i++) {          // fino a ~2 minuti
+    await new Promise(r => setTimeout(r, 6000));
+    let s;
+    try { s = await statusDetail(publish_id); errori = 0; }
+    catch (e) { warn('stato non leggibile:', e.message); if (++errori >= 3) break; continue; }
+    if (s.status !== esito) { esito = s.status; onProgress(`stato ${esito}`); }
+    motivo = s.fail_reason || motivo;
+    if (esito === 'FAILED') throw new Error(`TikTok ha rifiutato il video durante l'elaborazione${motivo ? ` (${motivo})` : ''}`);
+    if (esito === 'PUBLISH_COMPLETE' || esito === 'SEND_TO_USER_INBOX') break;
+  }
+  const confermato = esito === 'PUBLISH_COMPLETE' || esito === 'SEND_TO_USER_INBOX';
+  log(`${direct() ? 'pubblicato' : 'mandato in bozza'}: ${publish_id} (${(size / 1048576).toFixed(1)} MB) stato ${esito || 'sconosciuto'}`);
+  return { publish_id, mode: direct() ? 'diretta' : 'bozza', status: esito || 'UNKNOWN', pending: !confermato };
+}
+
+/** stato dettagliato di una pubblicazione: { status, fail_reason } */
+async function statusDetail(publish_id) {
+  const token = await accessToken();
+  const j = await post('https://open.tiktokapis.com/v2/post/publish/status/fetch/', { publish_id }, token);
+  const d = (j && j.data) || {};
+  return { status: d.status || 'UNKNOWN', fail_reason: d.fail_reason || '' };
 }
 
 /** stato di una pubblicazione: PROCESSING_UPLOAD | PUBLISH_COMPLETE | FAILED … */
-async function status(publish_id) {
-  const token = await accessToken();
-  const j = await post('https://open.tiktokapis.com/v2/post/publish/status/fetch/', { publish_id }, token);
-  return (j.data && j.data.status) || 'UNKNOWN';
-}
+const status = async (publish_id) => (await statusDetail(publish_id)).status;
 
-module.exports = { configured, linkable, direct, me, creatorInfo, sendVideo, status, authUrl, exchangeCode, setRefresh, setOnRotate, redirectUri };
+module.exports = { configured, linkable, direct, me, creatorInfo, sendVideo, status, statusDetail, authUrl, exchangeCode, setRefresh, setOnRotate, redirectUri };

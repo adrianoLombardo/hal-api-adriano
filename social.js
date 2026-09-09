@@ -30,12 +30,27 @@ let state = null;
 let busy = false;
 
 /* ── stato ── */
-function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {}, igToken: null, igTokenAt: null, edits: {}, schedule: {}, ttRefresh: null, ttOpenId: null, ttAt: null }; }
+function defaultState() { return { paused: false, sent: {}, done: {}, postponed: {}, lastTikTokPing: {}, igToken: null, igTokenAt: null, edits: {}, schedule: {}, ttRefresh: null, ttOpenId: null, ttAt: null, ttScope: null, lastSlot: null }; }
 function loadState() {
-  try { state = Object.assign(defaultState(), JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))); }
-  catch (e) { state = defaultState(); }
+  let raw = null;
+  try { raw = fs.readFileSync(STATE_FILE, 'utf8'); }
+  catch (e) { state = defaultState(); return; }        // primo avvio: il file non c'e' ancora
+  try { state = Object.assign(defaultState(), JSON.parse(raw)); }
+  catch (e) {
+    // stato illeggibile (scrittura interrotta a meta'): ne tengo una copia invece di
+    // lasciare che il primo salvataggio cancelli pubblicazioni, modifiche e token
+    try { fs.writeFileSync(`${STATE_FILE}.corrotto-${Date.now()}`, raw); } catch (e2) {}
+    warn(`social-state.json illeggibile (${e.message}): riparto da zero, copia salvata accanto al file`);
+    state = defaultState();
+  }
 }
-function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); } catch (e) { warn('salvataggio stato:', e.message); } }
+/** scrittura atomica: un'interruzione a meta' lascerebbe un file troncato che al
+    riavvio azzera in silenzio done, edits e i token */
+function saveState() {
+  const tmp = `${STATE_FILE}.tmp`;
+  try { fs.writeFileSync(tmp, JSON.stringify(state, null, 2)); fs.renameSync(tmp, STATE_FILE); }
+  catch (e) { warn('salvataggio stato:', e.message); try { fs.unlinkSync(tmp); } catch (e2) {} }
+}
 function plan() {
   try { return JSON.parse(fs.readFileSync(PLAN_FILE, 'utf8')); } catch (e) { return { items: [] }; }
 }
@@ -75,22 +90,49 @@ function slotStep(list) {
 }
 function reschedule() {
   const oggi = todayIso();
-  const coda = plan().items
+  // l'ordine e' quello curato nel kit, che sopravvive nelle date del piano;
+  // l'id serve solo da spareggio (prima si ordinava per id e il calendario del bot
+  // divergeva da social-plan.json gia' al primo avvio)
+  const vivi = plan().items
     .filter(i => !i.skipped && !isDone(i.id))
-    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  // le date fissate a mano con /rimanda non vengono riassegnate a nessun altro
-  const fissate = new Set(coda.map(i => state.postponed[i.id]).filter(Boolean));
+    .sort((a, b) => String(a.date || '9').localeCompare(String(b.date || '9')) || String(a.id).localeCompare(String(b.id)));
+  // un rimando con data ormai passata scade: se no il reel resta escluso per sempre
+  // dalla riassegnazione e non riceve mai piu' un pacchetto
+  for (const i of vivi) {
+    const pin = state.postponed[i.id];
+    if (pin && pin < oggi) { delete state.postponed[i.id]; delete state.sent[i.id]; }
+  }
+  // il pacchetto di questo reel e' gia' uscito: tiene lo slot su cui e' uscito. Se ne
+  // prendesse uno nuovo il tick lo salterebbe (state.sent) e quella sera non uscirebbe niente
+  const tenuto = (i) => (state.sent[i.id] && !state.postponed[i.id])
+    ? ((state.schedule || {})[i.id] || { date: i.date, time: i.time, tiktokTime: i.tiktokTime })
+    : null;
+  const coda = vivi.filter(i => !state.postponed[i.id] && !tenuto(i));
+  // le date fissate a mano con /rimanda e quelle dei pacchetti gia' usciti non vanno a nessun altro
+  const fissate = new Set(vivi.flatMap(i => [state.postponed[i.id], (tenuto(i) || {}).date]).filter(Boolean));
   const tutti = slotList();
-  const liberi = tutti.filter(s => s.date >= oggi && !fissate.has(s.date));
+  // uno slot gia' servito e' consumato, anche se e' quello di oggi: il pacchetto e' uscito
+  // su quella data (state.lastSlot) o un reel del calendario e' stato pubblicato quel giorno.
+  // Senza questo il reel successivo eredita la data di oggi e il tick, cinque minuti dopo,
+  // gli manda il pacchetto: pubblicando di seguito l'intera serie si brucia in una sera.
+  const serviti = new Set([state.lastSlot, ...plan().items
+    .filter(i => !i.skipped && isDone(i.id))
+    .map(i => { const d = state.done[i.id] || {}; return todayIso(d.instagram || d.facebook || d.tiktok || 0); })].filter(Boolean));
+  const liberi = tutti.filter(s => s.date >= oggi && !fissate.has(s.date) && !serviti.has(s.date));
   const step = slotStep(tutti);
   const nuovo = {};
+  for (const i of vivi) { const t = tenuto(i); if (t) nuovo[i.id] = t; }
   let k = 0;
   for (const it of coda) {
-    if (state.postponed[it.id]) continue;
     if (!liberi[k]) {
-      // finiti gli slot del piano: prolungo con lo stesso passo
+      // finiti gli slot del piano: prolungo con lo stesso passo, mai all'indietro
+      // (ancorare all'ultima data del piano quando e' passata produce date gia'
+      //  trascorse e il tick non manda piu' niente, per sempre)
       const ultimo = liberi[k - 1] || tutti[tutti.length - 1] || { date: oggi, time: '18:30', tiktokTime: '20:00' };
-      liberi[k] = { date: addDays(ultimo.date, step), time: ultimo.time, tiktokTime: ultimo.tiktokTime };
+      let d = addDays(ultimo.date >= oggi ? ultimo.date : oggi, step);
+      // mai due reel lo stesso giorno: salto le date fissate a mano e quelle gia' servite
+      for (let giri = 0; (fissate.has(d) || serviti.has(d)) && giri < 60; giri++) d = addDays(d, step);
+      liberi[k] = { date: d, time: ultimo.time || '18:30', tiktokTime: ultimo.tiktokTime || '20:00' };
     }
     nuovo[it.id] = liberi[k++];
   }
@@ -146,6 +188,9 @@ function addDays(iso, n) {
   return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
 }
 function todayIso(ms = Date.now()) { const r = romeParts(ms); return `${r.y}-${String(r.m).padStart(2, '0')}-${String(r.d).padStart(2, '0')}`; }
+/** rimandare parte sempre da oggi: la data in calendario puo' essere gia' passata,
+    e sommarci 3 giorni sposterebbe il reel nel passato, dove non lo raggiunge piu' nessuno */
+const nonPrimaDiOggi = (iso) => { const o = todayIso(); return iso && iso > o ? iso : o; };
 
 /* ── testo ── */
 const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -162,8 +207,18 @@ const tagLine = (it) => {
 const coverTime = (it) => { const m = /^\s*([\d]+(?:[.,]\d+)?\s*s)/.exec(it.coverNote || ''); return m ? m[1] : ''; };
 const sendHour = () => Math.min(23, Math.max(0, Number(env('SOCIAL_HOUR', '18')) || 18));
 const sendAtMs = (it) => it.date ? atRome(it.date, sendHour(), 0) : null;
-const slotMs = (it) => it.date ? atRome(it.date, 18, 30) : null;
-const tiktokMs = (it) => it.date ? atRome(it.date, 20, 0) : null;
+/** riga del promemoria: quanto manca davvero allo slot, o da quanto e' passato.
+    La frase fissa «mancano 30 minuti» era falsa in tutta la finestra di recupero di 12 ore. */
+function promemoria(it) {
+  const orario = String(it.time || '18:30');
+  const [hh, mm] = orario.split(':').map(Number);
+  if (!it.date || !Number.isFinite(hh)) return '';
+  const min = Math.round((atRome(it.date, hh, mm || 0) - Date.now()) / 60000);
+  const q = (n) => (n < 60 ? `${n} minuti` : `${Math.round(n / 60)} ore`);
+  return min > 0
+    ? `\n<i>Promemoria automatico: mancano ${q(min)} allo slot delle ${esc(orario)}.</i>`
+    : `\n<i>Promemoria automatico in ritardo: lo slot delle ${esc(orario)} è passato da ${q(-min)}. Pubblica quando puoi.</i>`;
+}
 
 function keyboard(it) {
   const rows = [];
@@ -176,6 +231,16 @@ function keyboard(it) {
   rows.push([{ text: '⏭ Rimanda di 3 giorni', callback_data: `rl:pp:${it.id}` }]);
   if (ig.configured()) rows.push([{ text: '✍️ L\'ho pubblicato a mano', callback_data: `rl:ig:${it.id}` }]);
   return { inline_keyboard: rows };
+}
+/** tastiera dei soli canali ancora da fare: blog.js svuota quella del pacchetto al primo
+    tocco, quindi ogni messaggio che nomina un pulsante deve riportarselo dietro */
+function keyboardRestanti(it) {
+  const d = state.done[it.id] || {};
+  const rows = keyboard(it).inline_keyboard.filter(row => !row.some(b =>
+    (d.instagram && /:p?ig:/.test(b.callback_data)) ||
+    ((d.tiktok || d.tiktokDraft) && /:p?tt:/.test(b.callback_data)) ||
+    (d.facebook && /:pfb:/.test(b.callback_data))));
+  return rows.length ? { inline_keyboard: rows } : null;
 }
 
 /* ── pubblicazione vera ──
@@ -190,7 +255,7 @@ async function conBlocco(chiave, chatId, quando, fn) {
 }
 
 async function doPublishInstagram(it, chatId) {
-  const send = (t) => bot.send(chatId, t);
+  const send = (t, e) => bot.send(chatId, t, e);
   await send(`🚀 Pubblico il reel ${it.reel} su Instagram. Il caricamento richiede uno o due minuti…`);
   const r = await ig.publishReel({
     videoUrl: it.video, caption: igFull(it), coverUrl: it.cover, shareToFeed: true,
@@ -199,28 +264,40 @@ async function doPublishInstagram(it, chatId) {
   });
   markDone(it.id, { instagram: Date.now(), instagramId: r.id, permalink: r.permalink || null });
   await send(`✅ <b>Pubblicato su Instagram</b>${r.permalink ? `\n${r.permalink}` : ''}\n\nRicordati della copertina: in Instagram puoi cambiarla dal fotogramma a ${esc(coverTime(it) || '—')}.\n${afterPublish(it)}`);
-  if (fb.configured()) await send('📘 Vuoi anche su Facebook? Premi «Pubblica su Facebook» qui sopra.');
-  if (tiktok.configured()) await send('Alle 20:00 ti ricordo TikTok, oppure premi ora il pulsante di TikTok qui sopra.');
+  // i pulsanti del pacchetto sono stati cancellati da blog.js al primo tocco: chi
+  // resta va riallegato qui sotto, se no il messaggio nomina bottoni che non esistono più
+  const resta = keyboardRestanti(it);
+  if (resta) await send(`Vuoi pubblicarlo anche altrove? Premi qui sotto.${tiktok.configured() ? '\nAlle 20:00 ti ricordo TikTok comunque.' : ''}`, { reply_markup: resta });
 }
 
 async function doPublishFacebook(it, chatId) {
   const send = (t) => bot.send(chatId, t);
   await send(`📘 Pubblico il reel ${it.reel} sulla Pagina Facebook…`);
   const r = await fb.publishReel({ videoUrl: it.video, description: igFull(it), onProgress: (st) => log(`reel ${it.id} facebook: ${st}`) });
-  markDone(it.id, { facebook: Date.now(), facebookId: r.id, facebookLink: r.permalink || null });
+  // con r.pending Meta non ha ancora finito e il permalink e' solo indovinato: lo registro
+  // come tale. Il video e' comunque stato accettato: ricaricarlo farebbe un doppione.
+  markDone(it.id, { facebook: Date.now(), facebookId: r.id, facebookLink: r.pending ? null : (r.permalink || null), facebookPending: !!r.pending });
   await send(r.pending
-    ? `📘 Reel ${it.reel} caricato su Facebook: sta ancora elaborando, comparirà tra qualche minuto.\n${esc(r.permalink)}`
-    : `✅ <b>Pubblicato su Facebook</b>\n${esc(r.permalink)}`);
+    ? `📘 Reel ${it.reel} caricato su Facebook (id ${esc(r.id)}): Meta sta ancora elaborando, comparirà tra qualche minuto.\n<b>Non ricaricarlo</b>: il video è già stato accettato.\n${afterPublish(it)}`
+    : `✅ <b>Pubblicato su Facebook</b>\n${esc(r.permalink)}\n${afterPublish(it)}`);
 }
 
 async function doPublishTikTok(it, chatId) {
   const send = (t) => bot.send(chatId, t);
+  // TIKTOK_DIRECT cambiato dopo il collegamento: il token ha solo video.upload e ogni invio fallisce
+  if (tiktok.direct() && state.ttScope && !/\bvideo\.publish\b/.test(state.ttScope))
+    return send(`⚠️ TikTok è collegato con i soli permessi «${esc(state.ttScope)}»: con <code>TIKTOK_DIRECT=1</code> serve anche <code>video.publish</code>.\nRifai il collegamento con <code>/tiktok rifai</code>, oppure togli TIKTOK_DIRECT da Railway.`);
   await send(`${tiktok.direct() ? '🚀 Pubblico' : '📥 Mando'} il reel ${it.reel} su TikTok…`);
   const r = await tiktok.sendVideo({ videoUrl: it.video, title: it.tiktok, onProgress: (st) => log(`reel ${it.id} tiktok: ${st}`) });
+  if (r.mode === 'bozza') {
+    // il video e' solo nelle bozze e va ancora pubblicato a mano: NON e' una pubblicazione.
+    // Segnarlo come tale toglieva il reel dal calendario e spegneva Instagram e Facebook.
+    state.done[it.id] = { ...(state.done[it.id] || {}), tiktokDraft: Date.now(), tiktokId: r.publish_id };
+    saveState();
+    return send(`📥 <b>Video su TikTok</b>, nelle bozze.\nApri l'app TikTok → notifiche o bozze → aggiungi la didascalia (te l'ho mandata sopra) e pubblica.\n🗓 Il reel ${it.reel} resta in calendario: finché non esce davvero non lo tolgo.`);
+  }
   markDone(it.id, { tiktok: Date.now(), tiktokId: r.publish_id });
-  await send(r.mode === 'bozza'
-    ? `📥 <b>Video su TikTok</b>, nelle bozze.\nApri l'app TikTok → notifiche o bozze → aggiungi la didascalia (te l'ho mandata sopra) e pubblica.`
-    : `✅ <b>Pubblicato su TikTok</b> (id ${esc(r.publish_id)}).`);
+  await send(`✅ <b>Pubblicato su TikTok</b> (id ${esc(r.publish_id)}).\n${afterPublish(it)}`);
 }
 
 /* ── invio del pacchetto ── */
@@ -232,59 +309,94 @@ async function sendPackage(it, chatId, { manual = false } = {}) {
   try {
     const when = it.date ? `${dateIt(it.date)} alle ${it.time}` : 'quando vuoi';
     const head = `🎬 <b>Reel ${it.reel} · ${esc(it.title)}</b>\nInstagram ${esc(when)} · TikTok alle ${esc(it.tiktokTime)}${coverTime(it) ? `\n🖼 Copertina: fotogramma a ${esc(coverTime(it))}` : ''}`;
+    let consegnato = true;   // il video (o almeno il suo link) è arrivato ad Adriano
     try {
       await bot.tg('sendVideo', { chat_id: to, video: it.video, caption: head, parse_mode: 'HTML', supports_streaming: true, width: 1080, height: 1920 });
     } catch (e) {
       warn('sendVideo fallito, mando il link:', e.message);
-      await bot.send(to, `${head}\n\n⚠️ Video non allegato (${esc((e.message || '').slice(0, 120))}). Scaricalo qui: ${it.video}`);
+      try { await bot.send(to, `${head}\n\n⚠️ Video non allegato (${esc((e.message || '').slice(0, 120))}). Scaricalo qui: ${it.video}`); }
+      catch (e2) { consegnato = false; warn('anche il link del video è fallito:', e2.message); }
     }
     try { await bot.tg('sendPhoto', { chat_id: to, photo: it.cover, caption: `Copertina consigliata${it.coverNote ? ' (' + esc(it.coverNote) + ')' : ''}. Puoi anche sceglierla dalla timeline in Instagram.`, parse_mode: 'HTML' }); } catch (e) { warn('copertina:', e.message); }
+    // Il video e la copertina sono partiti: il segnaposto va messo QUI. In fondo, un errore
+    // su uno dei messaggi seguenti (429 «retry after», timeout, 502) lo lascia vuoto e il tick
+    // rispedisce l'intero pacchetto — video da 16 MB compreso — ogni 5 minuti per 12 ore.
+    // Un pacchetto chiesto a mano nel giorno dello slot vale come promemoria: se no il tick lo rimanda.
+    if (consegnato && (!manual || (it.date && it.date === todayIso()))) {
+      state.sent[it.id] = Date.now();
+      if (it.date) state.lastSlot = it.date;      // slot servito: non va riassegnato a un altro reel
+      saveState();
+    }
     const tl = tagLine(it);
-    await bot.send(to, `📄 <b>Didascalia Instagram</b> — tocca per copiare\n${pre(igFull(it))}${tl ? '\n' + esc(tl) : ''}`);
     let extra = `🎵 <b>TikTok</b> (${esc(it.tiktokTime)}) — tocca per copiare\n${pre(it.tiktok)}`;
     if (it.alt) extra += `\n\n♿ <b>Testo alternativo</b> (Instagram → Impostazioni avanzate)\n${pre(it.alt)}`;
     if (it.english) extra += `\n\n🇬🇧 <i>Versione inglese, se la vuoi aggiungere:</i>\n${pre(it.english)}`;
-    await bot.send(to, extra);
     const auto = ig.configured() || tiktok.configured();
-    await bot.send(to, `${auto ? 'Premi qui sotto e pubblico io.' : "Quando l'hai pubblicato, segnalo qui sotto."}${manual ? '' : '\n<i>Promemoria automatico: mancano 30 minuti allo slot.</i>'}`, { reply_markup: keyboard(it) });
-    if (!manual) { state.sent[it.id] = Date.now(); saveState(); }
+    try {
+      await bot.send(to, `📄 <b>Didascalia Instagram</b> — tocca per copiare\n${pre(igFull(it))}${tl ? '\n' + esc(tl) : ''}`);
+      await bot.send(to, extra);
+      await bot.send(to, `${auto ? 'Premi qui sotto e pubblico io.' : "Quando l'hai pubblicato, segnalo qui sotto."}${manual ? '' : promemoria(it)}`, { reply_markup: keyboard(it) });
+    } catch (e) {
+      warn('testi del pacchetto:', e.message);
+      // un solo secondo tentativo, leggero: i pulsanti sono la parte che serve davvero
+      const pausa = Math.min(60, Number((/retry after (\d+)/i.exec(e.message || '') || [])[1] || 3) + 1);
+      await new Promise(r => setTimeout(r, pausa * 1000));
+      try { await bot.send(to, `⚠️ Alcuni testi del reel ${it.reel} non sono passati. Riprendili con /reel ${it.reel}.`, { reply_markup: keyboard(it) }); }
+      catch (e2) { warn('anche il ripiego dei testi è fallito:', e2.message); }
+    }
     log(`pacchetto inviato: reel ${it.id} (${it.title})`);
   } finally { busy = false; }
 }
 
 /* ── token Instagram: dura 60 giorni, si rinnova quando ha almeno 24 h di vita ── */
 async function refreshIgToken({ force = false } = {}) {
-  if (!ig.configured()) return;
+  if (!ig.configured()) return { ok: false, motivo: 'Instagram non è configurato (IG_USER_ID, IG_ACCESS_TOKEN)' };
   const age = state.igTokenAt ? Date.now() - state.igTokenAt : Infinity;
-  if (!force && age < 20 * 86400 * 1000) return;          // rinnovo ogni 20 giorni
+  if (!force && age < 20 * 86400 * 1000) return { ok: false, motivo: 'non è ancora il momento del rinnovo' };
   try {
     const r = await ig.refreshToken();
     if (r && r.access_token) {
       state.igToken = r.access_token; state.igTokenAt = Date.now(); saveState();
       ig.setToken(r.access_token);
-      log(`token Instagram rinnovato, scade tra ${Math.round((r.expires_in || 0) / 86400)} giorni`);
+      const giorni = Math.round((r.expires_in || 0) / 86400);
+      log(`token Instagram rinnovato, scade tra ${giorni} giorni`);
+      return { ok: true, giorni };
     }
-  } catch (e) { warn('rinnovo token Instagram:', (e.message || '').slice(0, 200)); }
+    return { ok: false, motivo: 'risposta senza access_token' };
+  } catch (e) {
+    warn('rinnovo token Instagram:', (e.message || '').slice(0, 200));
+    return { ok: false, motivo: (e.message || 'errore sconosciuto').slice(0, 200) };
+  }
 }
 
 /* ── scheduler ── */
 async function tick() {
   if (!bot || !bot.owner() || state.paused || env('SOCIAL_ENABLED') === '0') return;
   const now = Date.now();
+  // Promemoria TikTok alle 20:00 del giorno in cui il reel è uscito altrove, una volta sola.
+  // Sta PRIMA del ciclo qui sotto: un reel pubblicato è già isDone() e lì verrebbe saltato,
+  // quindi il ramo era irraggiungibile e il promemoria non è mai partito per nessun reel.
+  // È ancorato al giorno della pubblicazione, non allo slot: dopo markDone il reel perde
+  // lo slot e it.date torna alla data grezza del piano, che può essere lontana o passata.
+  for (const it of plan().items.map(withEdits)) {
+    const d = state.done[it.id];
+    const quando = d && !d.tiktok && !d.tiktokDraft && (d.instagram || d.facebook);
+    if (!quando || state.lastTikTokPing[it.id]) continue;
+    const tt = atRome(todayIso(quando), 20, 0);
+    if (now < tt || now - tt >= 4 * 3600 * 1000) continue;
+    state.lastTikTokPing[it.id] = Date.now(); saveState();
+    const bottone = tiktok.configured()
+      ? { text: tiktok.direct() ? '🚀 Pubblica su TikTok' : '📥 Manda a TikTok (bozza)', callback_data: `rl:ptt:${it.id}` }
+      : { text: '🎵 Pubblicato su TikTok', callback_data: `rl:tt:${it.id}` };
+    try { await bot.notifyOwner(`🎵 <b>TikTok</b> — è l'ora del reel ${it.reel} · ${esc(it.title)}\n${pre(it.tiktok)}`, { reply_markup: { inline_keyboard: [[bottone]] } }); } catch (e) {}
+    return;
+  }
   for (const it of items()) {
     if (!it.date || isDone(it.id)) continue;
     const at = sendAtMs(it);
     if (at && now >= at && !state.sent[it.id] && now - at < 12 * 3600 * 1000) {
       try { await sendPackage(it); } catch (e) { warn('invio automatico:', e.message); }
       return; // uno per giro
-    }
-    // promemoria TikTok alle 20:00 se Instagram è fatto e TikTok no
-    const tt = tiktokMs(it);
-    const d = state.done[it.id];
-    if (tt && now >= tt && now - tt < 4 * 3600 * 1000 && d && d.instagram && !d.tiktok && !state.lastTikTokPing[it.id]) {
-      state.lastTikTokPing[it.id] = Date.now(); saveState();
-      try { await bot.notifyOwner(`🎵 <b>TikTok</b> — è l'ora del reel ${it.reel} · ${esc(it.title)}\n${pre(it.tiktok)}`, { reply_markup: { inline_keyboard: [[{ text: '🎵 Pubblicato su TikTok', callback_data: `rl:tt:${it.id}` }]] } }); } catch (e) {}
-      return;
     }
   }
 }
@@ -295,6 +407,16 @@ let awaiting = null;   // { id, field: 'caption' | 'tags', chatId, at }
     i messaggi liberi, comprese le correzioni degli articoli del blog */
 const ATTESA_MS = 15 * 60 * 1000;
 const inAttesa = () => !!(awaiting && Date.now() - awaiting.at < ATTESA_MS);
+/** qualunque altra azione annulla l'attesa, dicendolo: se no i messaggi liberi restano
+    dirottati qui e le correzioni degli articoli del blog finiscono in una didascalia */
+function annullaAttesa(chatId) {
+  if (!inAttesa()) { awaiting = null; return; }
+  const a = awaiting; awaiting = null;
+  const it = findItem(a.id);
+  const cmd = a.field === 'caption' ? 'didascalia' : 'tag';
+  Promise.resolve(bot.send(chatId || a.chatId,
+    `↩️ Ho annullato la modifica ${a.field === 'caption' ? 'della didascalia' : 'dei tag'} del reel ${it ? it.reel : esc(a.id)}: nel frattempo hai fatto altro. Rilancia /${cmd}${it ? ' ' + it.reel : ''} quando vuoi.`)).catch(() => {});
+}
 let ttState = null;    // csrf dell'autorizzazione TikTok in corso
 
 /** La chiocciola e' obbligatoria: senza, una frase italiana diventerebbe una lista
@@ -309,7 +431,8 @@ async function onText(text, chatId) {
   if (!inAttesa()) { awaiting = null; return; }
   const it = findItem(awaiting.id);
   const field = awaiting.field;
-  if (/^annulla$/i.test(text.trim())) { awaiting = null; return bot.send(chatId, 'Lasciato com\'era.'); }
+  // la tastiera del pacchetto è stata cancellata da blog.js: la riporto sulle uscite
+  if (/^annulla$/i.test(text.trim())) { awaiting = null; return bot.send(chatId, 'Lasciato com\'era.', it ? { reply_markup: keyboard(it) } : undefined); }
   if (!it) { awaiting = null; return bot.send(chatId, 'Reel non trovato.'); }
   if (field === 'caption') {
     // solo il blocco di hashtag in fondo conta: uno scritto dentro la frase resta nel testo
@@ -328,7 +451,7 @@ async function onText(text, chatId) {
       const { tags, collaborators } = parseHandles(text);
       if (!tags.length && !collaborators.length) {
         awaiting = null;   // non tengo in ostaggio i messaggi successivi (es. le correzioni del blog)
-        return bot.send(chatId, 'Non ho trovato nomi utente: devono iniziare con la chiocciola, per esempio <code>@holyclub @sublimetecnologico | @holyclub</code>.\nNon ho cambiato niente; rilancia /tag quando vuoi.');
+        return bot.send(chatId, 'Non ho trovato nomi utente: devono iniziare con la chiocciola, per esempio <code>@holyclub @sublimetecnologico | @holyclub</code>.\nNon ho cambiato niente; rilancia /tag quando vuoi.', { reply_markup: keyboard(it) });
       }
       setEdit(it.id, { userTags: tags, collaborators });
     }
@@ -373,13 +496,17 @@ const HELP = `Reel (Instagram e TikTok):
 /reels — calendario, stato e pulsanti per scegliere quale reel pubblicare ora
 /didascalia 3 — riscrivi la didascalia del reel 3
 /tag 3 — scegli chi taggare e i collaboratori
-/pubblicareel 3 — pubblica subito il reel 3 su Instagram
-/pubblicafb 3 — pubblica il reel 3 sulla Pagina Facebook
+/pubblicareel 3 — pubblica subito il reel 3 su Instagram (aggiungi «rifai» per ripubblicarne uno già uscito)
+/pubblicafb 3 — pubblica il reel 3 sulla Pagina Facebook (idem con «rifai»)
+/rinnovatoken [rifai] — rinnova il token Instagram («rifai» riparte da IG_ACCESS_TOKEN)
 /tiktok — collega l'account TikTok (una volta sola)
 /social — stato dei collegamenti Instagram e TikTok
 /pubblicato 3 — segna il reel 3 come pubblicato (se l'hai fatto a mano)
 /rimanda 3 — sposta il reel 3 di 3 giorni
 /reelpausa e /reelriprendi — ferma o riattiva i promemoria`;
+
+/** «rifai»/«forza» in coda al comando: unica via per ripubblicare di proposito */
+const forzato = (arg) => /\b(rifai|forza|forzato)\b/i.test(String(arg || ''));
 
 function findReel(arg) {
   const n = String(arg || '').replace(/[^0-9]/g, '');
@@ -390,6 +517,8 @@ function findReel(arg) {
 
 async function onCommand(cmd, arg, chatId) {
   const send = (t, e) => bot.send(chatId, t, e);
+  // /didascalia e /tag riscrivono già l'attesa; ogni altro comando la chiude
+  if (cmd !== 'didascalia' && cmd !== 'tag') annullaAttesa(chatId);
   switch (cmd) {
     case 'reel': {
       let it = arg ? findReel(arg) : null;
@@ -420,20 +549,32 @@ async function onCommand(cmd, arg, chatId) {
     case 'rimanda': {
       const it = findReel(arg);
       if (!it || !it.date) return send('Quale reel? Esempio: /rimanda 3');
-      state.postponed[it.id] = addDays(it.date, 3);
+      state.postponed[it.id] = addDays(nonPrimaDiOggi(it.date), 3);
       delete state.sent[it.id]; saveState(); reschedule();
       return send(`⏭ Reel ${it.reel} spostato a ${esc(dateIt(state.postponed[it.id]))}. Gli altri si sono risistemati negli slot liberi.`);
     }
     case 'pubblicareel': {
-      const it = findReel(arg) || items().find(x => !isDone(x.id));
+      // un numero sbagliato non deve ripiegare sul prossimo reel: sarebbe una
+      // pubblicazione pubblica e irreversibile di un reel che nessuno ha chiesto
+      const q = String(arg || '').trim();
+      const it = q ? findReel(q) : items().find(x => !isDone(x.id));
+      if (q && !it) return send(`Reel ${esc(q)} non trovato. /reels per la lista.`);
       if (!it) return send('Quale reel? Esempio: /pubblicareel 3');
       if (!ig.configured()) return send('Instagram non è ancora collegato: /social per lo stato.');
+      const d = state.done[it.id] || {};
+      if ((d.instagram || d.instagramId) && !forzato(q))
+        return send(`Il reel ${it.reel} è già uscito su Instagram${d.permalink ? ': ' + d.permalink : ''}. Non lo rifaccio.\nPer pubblicarlo davvero un'altra volta: <code>/pubblicareel ${it.reel} rifai</code>`);
       return conBlocco(`ig:${it.id}`, chatId, 'La pubblicazione su Instagram', () => doPublishInstagram(it, chatId));
     }
     case 'pubblicafb': {
-      const it = findReel(arg) || items().find(x => !isDone(x.id));
+      const q = String(arg || '').trim();
+      const it = q ? findReel(q) : items().find(x => !isDone(x.id));
+      if (q && !it) return send(`Reel ${esc(q)} non trovato. /reels per la lista.`);
       if (!it) return send('Quale reel? Esempio: /pubblicafb 3');
       if (!fb.configured()) return send('Facebook non è ancora collegato: /social per lo stato.');
+      const d = state.done[it.id] || {};
+      if ((d.facebook || d.facebookId) && !forzato(q))
+        return send(`Il reel ${it.reel} è già su Facebook${d.facebookLink ? ': ' + d.facebookLink : ''}${d.facebookPending ? ' (Meta lo stava ancora elaborando)' : ''}. Non lo rifaccio.\nPer ripubblicarlo davvero: <code>/pubblicafb ${it.reel} rifai</code>`);
       return conBlocco(`fb:${it.id}`, chatId, 'La pubblicazione su Facebook', () => doPublishFacebook(it, chatId));
     }
     case 'tiktok': {
@@ -446,9 +587,17 @@ async function onCommand(cmd, arg, chatId) {
       return send(`🎵 <b>Collega TikTok</b>\nApri questo link e autorizza l'app. Il collegamento si chiude da solo.\n\n${esc(tiktok.authUrl(ttState))}`, { disable_web_page_preview: true });
     }
     case 'rinnovatoken': {
-      await refreshIgToken({ force: true });
+      // «rifai» butta via il token salvato sul volume e riparte da IG_ACCESS_TOKEN:
+      // senza, un token revocato resta applicato per sempre e incollarne uno nuovo
+      // su Railway non ha nessun effetto (state.igToken vince sempre sulla variabile)
+      const rifai = forzato(arg) || /\b(azzera|nuovo)\b/i.test(String(arg || ''));
+      if (rifai) { state.igToken = null; state.igTokenAt = null; saveState(); ig.setToken(null); }
+      const r = await refreshIgToken({ force: true });
       const quando = state.igTokenAt ? new Date(state.igTokenAt).toLocaleDateString('it-IT') : 'mai';
-      return send(`Token Instagram: ultimo rinnovo ${esc(quando)}. Usa /social per verificarlo.`);
+      const testa = rifai ? 'Ho scartato il token salvato: riparto da <code>IG_ACCESS_TOKEN</code>.\n' : '';
+      return send(r.ok
+        ? `${testa}✅ Token Instagram rinnovato: scade fra ${r.giorni} giorni.`
+        : `${testa}⚠️ <b>Rinnovo del token Instagram non riuscito.</b>\n${esc(r.motivo)}\nUltimo rinnovo riuscito: ${esc(quando)}. Controlla con /social.${rifai ? '' : '\nSe hai appena messo un token nuovo su Railway: <code>/rinnovatoken rifai</code>.'}`);
     }
     case 'didascalia': case 'tag': {
       const it = findReel(arg);
@@ -465,7 +614,11 @@ async function onCommand(cmd, arg, chatId) {
         catch (e) { righe.push(`📸 Instagram: token NON valido — ${esc((e.message || '').slice(0, 160))}`); }
       } else righe.push('📸 Instagram: non configurato (IG_USER_ID, IG_ACCESS_TOKEN)');
       if (tiktok.configured()) {
-        try { const m = await tiktok.me(); righe.push(`🎵 TikTok: collegato come ${esc(m.display_name || m.open_id || '?')} — modalità ${tiktok.direct() ? 'pubblicazione diretta' : 'bozza'}`); }
+        try {
+          const m = await tiktok.me();
+          const manca = tiktok.direct() && state.ttScope && !/\bvideo\.publish\b/.test(state.ttScope);
+          righe.push(`🎵 TikTok: collegato come ${esc(m.display_name || m.open_id || '?')} — modalità ${tiktok.direct() ? 'pubblicazione diretta' : 'bozza'}${state.ttScope ? ` (permessi: ${esc(state.ttScope)})` : ''}${manca ? '\n   ⚠️ manca <code>video.publish</code>: rifai il collegamento con /tiktok rifai' : ''}`);
+        }
         catch (e) { righe.push(`🎵 TikTok: token NON valido — ${esc((e.message || '').slice(0, 160))}`); }
       } else if (tiktok.linkable()) righe.push('🎵 TikTok: app pronta, account da collegare — manda /tiktok');
       else righe.push('🎵 TikTok: non configurato (TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET)');
@@ -480,12 +633,36 @@ async function onCommand(cmd, arg, chatId) {
       return send(righe.join('\n'));
     }
     case 'reelpausa': state.paused = true; saveState(); return send('Promemoria dei reel in pausa. /reelriprendi per riattivarli.');
-    case 'reelriprendi': state.paused = false; saveState(); return send('Promemoria dei reel riattivati.');
+    case 'reelriprendi': {
+      state.paused = false; saveState();
+      reschedule();                                  // gli slot scaduti durante la pausa vanno riassegnati
+      const next = items().find(x => !isDone(x.id));
+      return send(`Promemoria dei reel riattivati.${next ? ` Prossimo: reel ${next.reel} · ${esc(next.title)} — ${esc(dateIt(next.date))}.` : ''}`);
+    }
   }
+}
+
+/** Esito di una pubblicazione fallita. markDone ha già salvato l'esito reale, quindi
+    se il canale risulta fatto l'errore era solo nei messaggi Telegram: dire «pubblicalo
+    a mano» in quel caso porta a un secondo post identico. Riallega anche i pulsanti,
+    che blog.js ha cancellato prima di passarci la callback. */
+function esitoErrore(it, chatId, e, campo, nome) {
+  warn(`pubblicazione ${nome}:`, e.message);
+  const d = state.done[it.id] || {};
+  const fatto = campo === 'tiktok' ? (d.tiktok || d.tiktokDraft) : d[campo];
+  const link = campo === 'instagram' ? d.permalink : (campo === 'facebook' ? d.facebookLink : null);
+  if (fatto) {
+    return bot.send(chatId, `⚠️ Il reel ${it.reel} <b>è stato pubblicato su ${nome}</b>${link ? `\n${link}` : ''}\nNon è partito il resto del messaggio: <code>${esc((e.message || '').slice(0, 300))}</code>\n\n<b>Non ripubblicarlo a mano.</b>`);
+  }
+  const resta = keyboardRestanti(it);
+  return bot.send(chatId, `❌ ${nome} non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>\n\nPuoi riprovare qui sotto, oppure pubblicarlo a mano dal telefono e segnarlo (anche con /pubblicato ${it.reel}).`,
+    resta ? { reply_markup: resta } : undefined);
 }
 
 async function onCallback(action, id, cb) {
   const chatId = cb.message && cb.message.chat && cb.message.chat.id;
+  // edcap/edtag riscrivono già l'attesa; ogni altro pulsante la chiude
+  if (action !== 'edcap' && action !== 'edtag') annullaAttesa(chatId);
   const it = findItem(id);
   if (!it) return bot.send(chatId, 'Reel non trovato.');
   const d = state.done[it.id] || { instagram: null, tiktok: null };
@@ -502,19 +679,21 @@ async function onCallback(action, id, cb) {
     return sendPackage(it, chatId, { manual: true });
   }
   if (action === 'pig') {
-    if (d.instagramId) return bot.send(chatId, `Il reel ${it.reel} è già stato pubblicato${d.permalink ? ': ' + d.permalink : ''}.`);
+    // il flag di canale, non l'id: con «L'ho pubblicato a mano» o /pubblicato l'id non c'e'
+    // e un tocco sul pulsante farebbe uscire una seconda copia del reel
+    if (d.instagram) return bot.send(chatId, `Il reel ${it.reel} è già stato pubblicato${d.permalink ? ': ' + d.permalink : ''}.${d.instagramId ? '' : ` (l'avevi segnato a mano; per pubblicarlo davvero: /pubblicareel ${it.reel} rifai)`}`);
     try { return await conBlocco(`ig:${it.id}`, chatId, 'La pubblicazione su Instagram', () => doPublishInstagram(it, chatId)); }
-    catch (e) { warn('pubblicazione IG:', e.message); return bot.send(chatId, `❌ Instagram non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>\n\nPuoi pubblicarlo a mano dal telefono e premere «L'ho pubblicato a mano».`); }
+    catch (e) { return esitoErrore(it, chatId, e, 'instagram', 'Instagram'); }
   }
   if (action === 'ptt') {
-    if (d.tiktokId) return bot.send(chatId, `Il reel ${it.reel} è già andato su TikTok.`);
+    if (d.tiktok || d.tiktokDraft) return bot.send(chatId, `Il reel ${it.reel} è già ${d.tiktok ? 'andato su TikTok' : 'nelle bozze di TikTok'}.`);
     try { return await conBlocco(`tt:${it.id}`, chatId, "L'invio a TikTok", () => doPublishTikTok(it, chatId)); }
-    catch (e) { warn('pubblicazione TikTok:', e.message); return bot.send(chatId, `❌ TikTok non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>`); }
+    catch (e) { return esitoErrore(it, chatId, e, 'tiktok', 'TikTok'); }
   }
   if (action === 'pfb') {
-    if (d.facebookId) return bot.send(chatId, `Il reel ${it.reel} è già su Facebook${d.facebookLink ? ': ' + d.facebookLink : ''}.`);
+    if (d.facebook) return bot.send(chatId, `Il reel ${it.reel} è già su Facebook${d.facebookLink ? ': ' + d.facebookLink : ''}${d.facebookPending ? ' (Meta lo stava ancora elaborando)' : ''}.${d.facebookId ? '' : ` (segnato a mano; per pubblicarlo davvero: /pubblicafb ${it.reel} rifai)`}`);
     try { return await conBlocco(`fb:${it.id}`, chatId, 'La pubblicazione su Facebook', () => doPublishFacebook(it, chatId)); }
-    catch (e) { warn('pubblicazione Facebook:', e.message); return bot.send(chatId, `❌ Facebook non ha accettato il reel ${it.reel}:\n<code>${esc((e.message || '').slice(0, 400))}</code>`); }
+    catch (e) { return esitoErrore(it, chatId, e, 'facebook', 'Facebook'); }
   }
   if (action === 'edcap' || action === 'edtag') {
     awaiting = { id: it.id, field: action === 'edcap' ? 'caption' : 'tags', chatId, at: Date.now() };
@@ -524,9 +703,10 @@ async function onCallback(action, id, cb) {
   }
   if (action === 'pp') {
     if (!it.date) return bot.send(chatId, 'Questo reel non è in calendario.');
-    state.postponed[it.id] = addDays(state.postponed[it.id] || it.date, 3);
+    if (isDone(it.id)) return bot.send(chatId, `Il reel ${it.reel} è già uscito: non c'è più niente da rimandare.`);
+    state.postponed[it.id] = addDays(nonPrimaDiOggi(state.postponed[it.id] || it.date), 3);
     delete state.sent[it.id]; saveState(); reschedule();
-    return bot.send(chatId, `⏭ Reel ${it.reel} spostato a ${esc(dateIt(state.postponed[it.id]))}.`);
+    return bot.send(chatId, `⏭ Reel ${it.reel} spostato a ${esc(dateIt(state.postponed[it.id]))}. Ti rimando il pacchetto quel giorno.`, { reply_markup: keyboard(findItem(it.id) || it) });
   }
 }
 
@@ -567,6 +747,9 @@ function init({ app, dataDir, adminAuth, blog }) {
       ttState = null;
       const t = await tiktok.exchangeCode(code);
       state.ttRefresh = t.refresh_token; state.ttOpenId = t.open_id || null; state.ttAt = Date.now();
+      // i permessi davvero concessi: TIKTOK_DIRECT cambiato dopo il collegamento
+      // lascerebbe il pulsante attivo con un token che non può pubblicare
+      state.ttScope = t.scope || null;
       saveState();
       tiktok.setRefresh(t.refresh_token);
       log('TikTok collegato');
@@ -578,7 +761,17 @@ function init({ app, dataDir, adminAuth, blog }) {
     }
   });
 
-  app.get('/api/admin/reels', adminAuth, (req, res) => res.json({ status: statusText(), state }));
+  // lista bianca come /api/admin/blog: lo stato grezzo conteneva igToken (pubblica su
+  // Instagram per 60 giorni) e ttRefresh, dietro una sola password con un default noto
+  app.get('/api/admin/reels', adminAuth, (req, res) => res.json({
+    status: statusText(),
+    state: {
+      paused: state.paused, sent: state.sent, done: state.done, postponed: state.postponed,
+      lastTikTokPing: state.lastTikTokPing, edits: state.edits, schedule: state.schedule, lastSlot: state.lastSlot,
+      igCollegato: !!state.igToken, igTokenAt: state.igTokenAt,
+      ttCollegato: !!state.ttRefresh, ttOpenId: state.ttOpenId, ttAt: state.ttAt, ttScope: state.ttScope,
+    },
+  }));
   app.post('/api/admin/reels/send/:id', adminAuth, async (req, res) => {
     const it = findItem(String(req.params.id).padStart(2, '0'));
     if (!it) return res.status(404).json({ error: 'reel non trovato' });
